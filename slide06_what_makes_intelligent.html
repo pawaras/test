@@ -1,0 +1,352 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="UTF-8">
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body {
+      width: 960px;
+      height: 540px;
+      font-family: Arial, sans-serif;
+      background: linear-gradient(180deg, #F8F9FA 0%, #FFFFFF 100%);
+      color: #1a1a1a;
+      overflow: hidden;
+      display: flex;
+      flex-direction: column;
+    }
+    
+    .header {
+      text-align: center;
+      padding: 24px 40px 16px 40px;
+    }
+    
+    h1 {
+      font-size: 36px;
+      font-weight: bold;
+      color: #1a1a1a;
+    }
+    
+    .highlight {
+      color: #D61120;
+    }
+    
+    .subtitle {
+      font-size: 16px;
+      color: #666666;
+      margin-top: 6px;
+    }
+    
+    .main-content {
+      flex: 1;
+      display: flex;
+      padding: 0 30px 20px 30px;
+    }
+    
+    /* Two Columns */
+    .column {
+      flex: 1;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      padding: 20px;
+      position: relative;
+    }
+    
+    .divider {
+      width: 2px;
+      background: linear-gradient(180deg, transparent 0%, #D0D0D0 20%, #D0D0D0 80%, transparent 100%);
+      margin: 0 10px;
+    }
+    
+    .col-title {
+      font-size: 22px;
+      font-weight: bold;
+      margin-bottom: 20px;
+      text-align: center;
+    }
+    
+    .col-title-old { color: #5A8BB8; }
+    .col-title-new { color: #D61120; }
+    
+    /* Visual Illustration Area */
+    .visual-area {
+      width: 280px;
+      height: 180px;
+      position: relative;
+      margin-bottom: 16px;
+    }
+    
+    /* OLD SIDE - Gears and clipboard style */
+    .gear {
+      position: absolute;
+      border-radius: 50%;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+    }
+    
+    .gear-large {
+      width: 80px;
+      height: 80px;
+      background: #5A8BB8;
+      top: 20px;
+      left: 10px;
+      font-size: 36px;
+    }
+    
+    .gear-med {
+      width: 50px;
+      height: 50px;
+      background: #8BADC4;
+      top: 80px;
+      left: 70px;
+      font-size: 22px;
+    }
+    
+    .gear-small {
+      width: 35px;
+      height: 35px;
+      background: #B8CCD8;
+      top: 10px;
+      left: 80px;
+      font-size: 16px;
+    }
+    
+    .clipboard {
+      position: absolute;
+      width: 100px;
+      height: 130px;
+      background: #FFFFFF;
+      border: 3px solid #5A8BB8;
+      border-radius: 8px;
+      right: 20px;
+      top: 30px;
+      display: flex;
+      flex-direction: column;
+      padding: 20px 10px 10px 10px;
+      gap: 8px;
+    }
+    
+    .clipboard-top {
+      position: absolute;
+      top: -10px;
+      left: 50%;
+      transform: translateX(-50%);
+      width: 40px;
+      height: 16px;
+      background: #5A8BB8;
+      border-radius: 4px;
+    }
+    
+    .clipboard-line {
+      height: 8px;
+      background: #E8E8E8;
+      border-radius: 4px;
+    }
+    
+    .clipboard-line.short { width: 70%; }
+    
+    .people-row {
+      position: absolute;
+      bottom: 10px;
+      left: 50%;
+      transform: translateX(-50%);
+      display: flex;
+      gap: 8px;
+    }
+    
+    .person {
+      width: 28px;
+      height: 28px;
+      background: #5A8BB8;
+      border-radius: 50%;
+      font-size: 14px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+    }
+    
+    /* NEW SIDE - Brain with orbiting icons */
+    .brain-center {
+      position: absolute;
+      width: 100px;
+      height: 100px;
+      background: radial-gradient(circle, #FFE0B2 0%, #FF9800 50%, #F57C00 100%);
+      border-radius: 50%;
+      top: 50%;
+      left: 50%;
+      transform: translate(-50%, -50%);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 50px;
+      box-shadow: 0 0 40px rgba(255, 152, 0, 0.5);
+    }
+    
+    .orbit-icon {
+      position: absolute;
+      width: 40px;
+      height: 40px;
+      background: #FFFFFF;
+      border-radius: 50%;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 20px;
+      box-shadow: 0 2px 8px rgba(0,0,0,0.1);
+      border: 2px solid #F0F0F0;
+    }
+    
+    .orbit-1 { top: 10px; left: 50%; transform: translateX(-50%); }
+    .orbit-2 { top: 40px; right: 15px; }
+    .orbit-3 { bottom: 40px; right: 15px; }
+    .orbit-4 { bottom: 10px; left: 50%; transform: translateX(-50%); }
+    .orbit-5 { bottom: 40px; left: 15px; }
+    .orbit-6 { top: 40px; left: 15px; }
+    
+    /* Key Points */
+    .key-points {
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+      width: 100%;
+    }
+    
+    .point {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      padding: 8px 12px;
+      border-radius: 8px;
+      font-size: 13px;
+    }
+    
+    .point-old {
+      background: rgba(90, 139, 184, 0.1);
+      color: #5A8BB8;
+    }
+    
+    .point-new {
+      background: rgba(214, 17, 32, 0.08);
+      color: #1a1a1a;
+    }
+    
+    .point-icon {
+      font-size: 16px;
+    }
+    
+    .point-x { color: #999999; }
+    .point-check { color: #D61120; font-weight: bold; }
+    
+    /* Footer */
+    .footer {
+      background: #000F0C;
+      padding: 14px 40px;
+      text-align: center;
+    }
+    
+    .footer-text {
+      font-size: 16px;
+      color: #FFFFFF;
+      font-style: italic;
+    }
+    
+    .footer-highlight {
+      color: #FF9800;
+      font-weight: bold;
+    }
+  </style>
+</head>
+<body>
+  <div class="header">
+    <h1>What Makes It <span class="highlight">"Intelligent"</span>?</h1>
+    <p class="subtitle">Beyond rules, into reasoning</p>
+  </div>
+  
+  <div class="main-content">
+    <!-- OLD: Traditional Automation -->
+    <div class="column">
+      <p class="col-title col-title-old">Traditional Automation</p>
+      
+      <div class="visual-area">
+        <div class="gear gear-large"><p style="color: #FFFFFF;">⚙️</p></div>
+        <div class="gear gear-med"><p style="color: #FFFFFF;">⚙️</p></div>
+        <div class="gear gear-small"><p style="color: #FFFFFF;">⚙️</p></div>
+        
+        <div class="clipboard">
+          <div class="clipboard-top"></div>
+          <div class="clipboard-line"></div>
+          <div class="clipboard-line short"></div>
+          <div class="clipboard-line"></div>
+          <div class="clipboard-line short"></div>
+        </div>
+        
+        <div class="people-row">
+          <div class="person"><p style="color: #FFFFFF;">👤</p></div>
+          <div class="person"><p style="color: #FFFFFF;">👤</p></div>
+          <div class="person"><p style="color: #FFFFFF;">👤</p></div>
+        </div>
+      </div>
+      
+      <div class="key-points">
+        <div class="point point-old">
+          <p class="point-icon point-x">✗</p>
+          <p>Fixed rules and logic</p>
+        </div>
+        <div class="point point-old">
+          <p class="point-icon point-x">✗</p>
+          <p>Static reports</p>
+        </div>
+        <div class="point point-old">
+          <p class="point-icon point-x">✗</p>
+          <p>One-size-fits-all</p>
+        </div>
+        <div class="point point-old">
+          <p class="point-icon point-x">✗</p>
+          <p>Manual adjustments</p>
+        </div>
+      </div>
+    </div>
+    
+    <div class="divider"></div>
+    
+    <!-- NEW: AI-Powered Intelligence -->
+    <div class="column">
+      <p class="col-title col-title-new">AI-Powered Intelligence</p>
+      
+      <div class="visual-area">
+        <div class="brain-center"><p>🧠</p></div>
+        <div class="orbit-icon orbit-1"><p>💡</p></div>
+        <div class="orbit-icon orbit-2"><p>📊</p></div>
+        <div class="orbit-icon orbit-3"><p>🎯</p></div>
+        <div class="orbit-icon orbit-4"><p>⚡</p></div>
+        <div class="orbit-icon orbit-5"><p>🔄</p></div>
+        <div class="orbit-icon orbit-6"><p>📈</p></div>
+      </div>
+      
+      <div class="key-points">
+        <div class="point point-new">
+          <p class="point-icon point-check">✓</p>
+          <p>Adaptive learning and reasoning</p>
+        </div>
+        <div class="point point-new">
+          <p class="point-icon point-check">✓</p>
+          <p>Dynamic insights and recommendations</p>
+        </div>
+        <div class="point point-new">
+          <p class="point-icon point-check">✓</p>
+          <p>Personalized strategies</p>
+        </div>
+        <div class="point point-new">
+          <p class="point-icon point-check">✓</p>
+          <p>Self-optimizing systems</p>
+        </div>
+      </div>
+    </div>
+  </div>
+  
+  <div class="footer">
+    <p class="footer-text">"Our AI agents don't just execute — they <span class="footer-highlight">reason</span>, <span class="footer-highlight">learn</span>, and <span class="footer-highlight">recommend</span>."</p>
+  </div>
+</body>
+</html>
