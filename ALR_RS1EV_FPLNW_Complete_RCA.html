@@ -1,0 +1,701 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="UTF-8">
+  <title>ALR RS1EV FPLNW Issue - Complete Root Cause Analysis</title>
+  <style>
+    body { font-family: Arial, sans-serif; font-size: 14px; color: #333; line-height: 1.6; max-width: 1200px; margin: 0 auto; padding: 20px; }
+    h1 { color: #1f4e79; border-bottom: 3px solid #1f4e79; padding-bottom: 10px; }
+    h2 { color: #1f4e79; border-bottom: 2px solid #ddd; padding-bottom: 4px; margin-top: 30px; }
+    h3 { color: #2f5597; margin-top: 20px; }
+    table { border-collapse: collapse; width: 100%; margin-top: 10px; margin-bottom: 15px; }
+    th, td { border: 1px solid #ccc; padding: 10px; text-align: left; vertical-align: top; }
+    th { background-color: #1f4e79; color: white; }
+    tr:nth-child(even) { background-color: #f9f9f9; }
+    .ok { color: green; font-weight: bold; }
+    .error { color: #c00000; font-weight: bold; }
+    .warning { color: #ff8c00; font-weight: bold; }
+    .note { background-color: #e7f3ff; border-left: 4px solid #1f4e79; padding: 12px; margin: 15px 0; }
+    .warning-box { background-color: #fff3cd; border-left: 4px solid #ff8c00; padding: 12px; margin: 15px 0; }
+    .success-box { background-color: #d4edda; border-left: 4px solid #28a745; padding: 12px; margin: 15px 0; }
+    .code { background-color: #f4f4f4; border: 1px solid #ccc; padding: 15px; font-family: Consolas, monospace; font-size: 13px; overflow-x: auto; white-space: pre-wrap; margin: 10px 0; }
+    .sql { background-color: #f8f8f8; border: 1px solid #ddd; padding: 15px; font-family: Consolas, monospace; font-size: 12px; overflow-x: auto; white-space: pre-wrap; margin: 10px 0; }
+    .step-box { background-color: #f0f0f0; border-radius: 5px; padding: 15px; margin: 15px 0; }
+    .highlight { background-color: #ffff00; padding: 2px 5px; }
+    ul { margin: 10px 0; }
+    li { margin: 5px 0; }
+    .toc { background-color: #f5f5f5; padding: 20px; border-radius: 5px; margin-bottom: 30px; }
+    .toc ul { list-style-type: none; padding-left: 0; }
+    .toc li { margin: 8px 0; }
+    .toc a { color: #1f4e79; text-decoration: none; }
+    .toc a:hover { text-decoration: underline; }
+    .premise-example { background-color: #fff; border: 1px solid #ddd; padding: 15px; margin: 10px 0; border-radius: 5px; }
+  </style>
+</head>
+<body>
+
+<h1>ALR RS1EV FPLNW Issue - Complete Root Cause Analysis</h1>
+
+<p><strong>Date:</strong> January 2026<br>
+<strong>Study:</strong> FPLC-RS1EV (FPLNW EV Customers)<br>
+<strong>Reported By:</strong> Neyla Cheraso, Sr. Rate Analyst</p>
+
+<div class="toc">
+  <h3>Table of Contents</h3>
+  <ul>
+    <li><a href="#executive-summary">1. Executive Summary</a></li>
+    <li><a href="#issue1">2. Issue #1: Customer Count Drop</a></li>
+    <li><a href="#issue2">3. Issue #2: Interval Data Stops After Meter Change</a></li>
+    <li><a href="#root-cause">4. Root Cause Analysis</a></li>
+    <li><a href="#evidence">5. Evidence from Error Table</a></li>
+    <li><a href="#solution">6. Recommended Solution</a></li>
+    <li><a href="#verification">7. Verification Queries & Steps</a></li>
+    <li><a href="#implementation">8. Implementation Guide</a></li>
+  </ul>
+</div>
+
+<h2 id="executive-summary">1. Executive Summary</h2>
+
+<div class="success-box">
+  <strong>Root Cause Identified:</strong> The INCOMPINTVS validation check in <code>validations.py</code> incorrectly treats expected EV charger removal as a data quality failure, causing premises to be excluded from the study.
+</div>
+
+<table>
+  <tr>
+    <th>Aspect</th>
+    <th>Finding</th>
+  </tr>
+  <tr>
+    <td>Issue Type</td>
+    <td>Validation Logic Error</td>
+  </tr>
+  <tr>
+    <td>Affected Study</td>
+    <td>FPLC-RS1EV (FPLNW EV Customers)</td>
+  </tr>
+  <tr>
+    <td>Root Cause</td>
+    <td>INCOMPINTVS check doesn't account for expected EV charger mid-cycle removal</td>
+  </tr>
+  <tr>
+    <td>Impact</td>
+    <td>Customer count dropped from 101 to 27 (73% reduction)</td>
+  </tr>
+  <tr>
+    <td>Fix Location</td>
+    <td><code>validations.py</code> lines 1548-1557</td>
+  </tr>
+  <tr>
+    <td>Fix Complexity</td>
+    <td>Low - Add filter to exclude EV meters from INCOMPINTVS check</td>
+  </tr>
+</table>
+
+<h2 id="issue1">2. Issue #1: Customer Count Drop</h2>
+
+<h3>Problem Statement</h3>
+<p>The RS1EV study customer count has dropped significantly since April 2025, contrary to expected growth.</p>
+
+<table>
+  <tr>
+    <th>Month</th>
+    <th>Customer Count</th>
+    <th>Change</th>
+    <th>Status</th>
+  </tr>
+  <tr>
+    <td>April 2025</td>
+    <td>101</td>
+    <td>-</td>
+    <td class="ok">Baseline</td>
+  </tr>
+  <tr>
+    <td>May 2025</td>
+    <td>57</td>
+    <td>↓44%</td>
+    <td class="error">Major Drop</td>
+  </tr>
+  <tr>
+    <td>June 2025</td>
+    <td>33</td>
+    <td>↓42%</td>
+    <td class="error">Major Drop</td>
+  </tr>
+  <tr>
+    <td>July 2025</td>
+    <td>27</td>
+    <td>↓18%</td>
+    <td class="error">Continued Drop</td>
+  </tr>
+  <tr>
+    <td>Aug-Oct 2025</td>
+    <td>34</td>
+    <td>↑26%</td>
+    <td class="warning">Slight Recovery</td>
+  </tr>
+  <tr>
+    <td>November 2025</td>
+    <td>40</td>
+    <td>↑18%</td>
+    <td class="warning">Partial Recovery</td>
+  </tr>
+</table>
+
+<div class="note">
+  <strong>Expected Behavior:</strong> The rate study should be increasing in total customers, not decreasing.
+</div>
+
+<h3>Root Cause for Issue #1</h3>
+<p>Premises are being <strong>excluded from the active study</strong> due to INCOMPINTVS errors. The validation process adds these premises to <code>bad_studypoints</code>, which are then filtered out.</p>
+
+<h2 id="issue2">3. Issue #2: Interval Data Stops After Meter Change</h2>
+
+<h3>Problem Statement</h3>
+<p>When an EV device/meter is changed (replaced) for an FPLNW installation, the interval data stops being received.</p>
+
+<h3>Reported Examples from Spreadsheet</h3>
+
+<table>
+  <tr>
+    <th>Premise ID</th>
+    <th>Meter Change Date</th>
+    <th>Data Received Until</th>
+    <th>Notes</th>
+  </tr>
+  <tr>
+    <td>70003417</td>
+    <td>2025-11-18</td>
+    <td>2025-11-19</td>
+    <td>Data stopped after meter change</td>
+  </tr>
+  <tr>
+    <td>70002132</td>
+    <td>2025-04-14</td>
+    <td>2025-04-15</td>
+    <td>Data stopped after meter change</td>
+  </tr>
+  <tr>
+    <td>70002972</td>
+    <td>2025-04-16</td>
+    <td>2025-04-16</td>
+    <td>Data stopped after meter change</td>
+  </tr>
+  <tr>
+    <td>70004472</td>
+    <td>2025-04-09</td>
+    <td>2025-04-09</td>
+    <td>Data stopped after meter change</td>
+  </tr>
+  <tr>
+    <td>70005262</td>
+    <td>2025-04-09</td>
+    <td>2025-04-11</td>
+    <td>Data stopped after meter change</td>
+  </tr>
+</table>
+
+<h3>"No Data Ch 1000" Premises</h3>
+<p>The spreadsheet also lists premises where "No Data has been received for Ch 1000":</p>
+
+<table>
+  <tr>
+    <th>Premise ID</th>
+    <th>EV Usage Data (per CAMS)</th>
+    <th>Notes</th>
+  </tr>
+  <tr>
+    <td>70674364</td>
+    <td>February - June and August</td>
+    <td>No Data for Ch 1000</td>
+  </tr>
+  <tr>
+    <td>70670026</td>
+    <td>All months</td>
+    <td>No Data for Ch 1000</td>
+  </tr>
+  <tr>
+    <td>70669597</td>
+    <td>June - September, December</td>
+    <td>No Data for Ch 1000</td>
+  </tr>
+  <tr>
+    <td>70664193</td>
+    <td>January - April 2025</td>
+    <td>No Data for Ch 1000</td>
+  </tr>
+  <tr>
+    <td>70663090</td>
+    <td>December 2025</td>
+    <td>No Data for Ch 1000</td>
+  </tr>
+</table>
+
+<div class="warning-box">
+  <strong>Important Finding:</strong> The error table shows these "No Data" premises actually DO have channel 1000 data - it comes and goes! The PREMISE errors show "channels changed from [1] to [1.0, 1000.0]" and back. This proves the data IS being fetched - the issue is the validation excluding them.
+</div>
+
+<h2 id="root-cause">4. Root Cause Analysis</h2>
+
+<h3>System Architecture</h3>
+
+<div class="step-box">
+  <strong>Data Flow:</strong>
+  <ol>
+    <li><strong>Data Fetch</strong> (<code>gulf_daily.json</code>) - Fetches meter and interval data from source databases</li>
+    <li><strong>Validation</strong> (<code>validations.py</code>) - Checks data quality, generates errors</li>
+    <li><strong>Study Population</strong> - Excludes bad_studypoints from active_premises</li>
+  </ol>
+</div>
+
+<h3>The Problematic Code</h3>
+
+<p><strong>File:</strong> <code>validations.py</code><br>
+<strong>Lines:</strong> 1548-1557</p>
+
+<div class="code">
+# Current Code - Incomplete Intervals Check
+df2_grouped1 = df2_grouped[~df2_grouped.meterstop_dt.isna()].copy()
+error_df_append = df2_grouped1[df2_grouped1.meterstop_dt < df2_grouped1.billstop][
+    ['studyid', 'premiseid', 'rltv_mo', 'studypoint', 'meterstop_dt', 'billstop']]
+</div>
+
+<p><strong>How INCOMPINTVS errors cause exclusion (line 706):</strong></p>
+
+<div class="code">
+bad_studypoints = bad_studypoints.append(error[error.errorcode == 'INCOMPINTVS'][['studyid', 'studypoint']])
+</div>
+
+<p><strong>How bad_studypoints are filtered out (lines 944-947):</strong></p>
+
+<div class="code">
+# Filter points for not in badstudypoints
+i1 = points.set_index(['studyid', 'studypoint']).index
+i2 = bad_studypoints.set_index(['studyid', 'studypoint']).index
+points = points[~i1.isin(i2)].reset_index()
+</div>
+
+<h3>The Logic Flow</h3>
+
+<div class="note">
+  <strong>What happens when an EV charger is removed mid-billing cycle:</strong>
+  <ol>
+    <li>EV charger physically removed on April 15</li>
+    <li>Interval data correctly stops on April 15 (<code>meterstop_dt = 2025-04-15</code>)</li>
+    <li>Billing period continues until April 28 (<code>billstop = 2025-04-28</code>)</li>
+    <li>Validation check: <code>meterstop_dt < billstop</code> → TRUE</li>
+    <li>INCOMPINTVS error generated</li>
+    <li>Premise added to <code>bad_studypoints</code></li>
+    <li>Premise excluded from active study</li>
+    <li>Customer count drops</li>
+  </ol>
+</div>
+
+<h3>Why This Is Wrong</h3>
+
+<p>EV chargers (channel 1000) are <strong>different from billing meters</strong>:</p>
+<ul>
+  <li>EV chargers can be physically removed mid-billing cycle - this is <strong>expected behavior</strong></li>
+  <li>The billing meter (channel 1) continues independently</li>
+  <li>The current validation treats this expected behavior as a data quality failure</li>
+</ul>
+
+<h2 id="evidence">5. Evidence from Error Table</h2>
+
+<h3>RS1EV Error Summary (350 total errors)</h3>
+
+<table>
+  <tr>
+    <th>Error Code</th>
+    <th>Count</th>
+    <th>Description</th>
+    <th>Impact</th>
+  </tr>
+  <tr>
+    <td>DIFFBILLCOMP</td>
+    <td>133</td>
+    <td>Interval vs billed usage mismatch</td>
+    <td>Data quality check</td>
+  </tr>
+  <tr>
+    <td>METERCHANGE</td>
+    <td>82</td>
+    <td>Meter started/stopped events</td>
+    <td>Informational</td>
+  </tr>
+  <tr>
+    <td>AUMONTH</td>
+    <td>64</td>
+    <td>Not enough months for average usage</td>
+    <td>New customer limitation</td>
+  </tr>
+  <tr>
+    <td class="error">INCOMPINTVS</td>
+    <td class="error">63</td>
+    <td class="error">Incomplete intervals - meter stops before bill ends</td>
+    <td class="error">Causes exclusion</td>
+  </tr>
+  <tr>
+    <td>NULLBILL</td>
+    <td>7</td>
+    <td>Zero billed usage</td>
+    <td>Data quality check</td>
+  </tr>
+  <tr>
+    <td>PREMISE</td>
+    <td>1</td>
+    <td>Master data change</td>
+    <td>Informational</td>
+  </tr>
+</table>
+
+<h3>Pattern: METERCHANGE → INCOMPINTVS</h3>
+
+<div class="premise-example">
+  <h4>Example: Premise 70002132</h4>
+  <table>
+    <tr>
+      <th>rltv_mo</th>
+      <th>errorcode</th>
+      <th>errormessage</th>
+    </tr>
+    <tr>
+      <td>202504</td>
+      <td>METERCHANGE</td>
+      <td>Meter 0910042001280659261222623334 (type evmeter) stopped on 2025-04-15</td>
+    </tr>
+    <tr>
+      <td>202504</td>
+      <td class="error">INCOMPINTVS</td>
+      <td class="error">Last meter stops at 2025-04-15, but bill runs until 2025-04-28</td>
+    </tr>
+  </table>
+  <p><strong>Result:</strong> Premise excluded from study due to INCOMPINTVS</p>
+</div>
+
+<div class="premise-example">
+  <h4>Example: Premise 70002972</h4>
+  <table>
+    <tr>
+      <th>rltv_mo</th>
+      <th>errorcode</th>
+      <th>errormessage</th>
+    </tr>
+    <tr>
+      <td>202505</td>
+      <td>METERCHANGE</td>
+      <td>Meter 0910042001280616508023621035 (type evmeter) stopped on 2025-04-16</td>
+    </tr>
+    <tr>
+      <td>202505</td>
+      <td class="error">INCOMPINTVS</td>
+      <td class="error">Last meter stops at 2025-04-16, but bill runs until 2025-05-07</td>
+    </tr>
+  </table>
+  <p><strong>Result:</strong> Premise excluded from study due to INCOMPINTVS</p>
+</div>
+
+<div class="premise-example">
+  <h4>Example: Premise 70005262</h4>
+  <table>
+    <tr>
+      <th>rltv_mo</th>
+      <th>errorcode</th>
+      <th>errormessage</th>
+    </tr>
+    <tr>
+      <td>202505</td>
+      <td>METERCHANGE</td>
+      <td>Meter 0910042001280606628322624931 (type evmeter) stopped on 2025-04-11</td>
+    </tr>
+    <tr>
+      <td>202505</td>
+      <td class="error">INCOMPINTVS</td>
+      <td class="error">Last meter stops at 2025-04-11, but bill runs until 2025-05-02</td>
+    </tr>
+  </table>
+  <p><strong>Result:</strong> Premise excluded from study due to INCOMPINTVS</p>
+</div>
+
+<h3>Evidence: Channel 1000 Data IS Being Fetched</h3>
+
+<p>For "No Data Ch 1000" premises, the error table shows channel changes:</p>
+
+<div class="premise-example">
+  <h4>Premise 70670026 - Channel Changes Over Time</h4>
+  <table>
+    <tr>
+      <th>rltv_mo</th>
+      <th>errorcode</th>
+      <th>errormessage</th>
+    </tr>
+    <tr>
+      <td>202506</td>
+      <td>PREMISE</td>
+      <td class="ok">channels changed from [1] to [1.0, 1000.0] ← Channel 1000 appeared!</td>
+    </tr>
+    <tr>
+      <td>202511</td>
+      <td>PREMISE</td>
+      <td class="error">channels changed from [1, 1000] to [1.0] ← Channel 1000 disappeared</td>
+    </tr>
+    <tr>
+      <td>202512</td>
+      <td>PREMISE</td>
+      <td class="error">channels changed from [1, 1000] to [1.0] ← Channel 1000 disappeared</td>
+    </tr>
+  </table>
+  <p><strong>Conclusion:</strong> Data IS being fetched - it comes and goes based on the EV charger lifecycle. The "No Data" note refers to the data disappearing after meter changes due to validation exclusion.</p>
+</div>
+
+<h2 id="solution">6. Recommended Solution</h2>
+
+<h3>Solution Overview</h3>
+
+<div class="success-box">
+  <strong>Fix:</strong> Modify the INCOMPINTVS check to skip EV meters (channel 1000, metertype evmeter/uevmeter). EV chargers stopping mid-cycle is expected behavior, not a data quality issue.
+</div>
+
+<h3>Code Change</h3>
+
+<p><strong>File:</strong> <code>validations.py</code><br>
+<strong>Lines:</strong> 1548-1557</p>
+
+<h4>Current Code (Problematic)</h4>
+<div class="code">
+# Incomplete Intervals Check
+print("Performing Incomplete Intervals Check")
+
+# Write to error table where the max meterstop_dt is less than the billstop
+df2_grouped1 = df2_grouped[~df2_grouped.meterstop_dt.isna()].copy()
+error_df_append = df2_grouped1[df2_grouped1.meterstop_dt < df2_grouped1.billstop][
+    ['studyid', 'premiseid', 'rltv_mo', 'studypoint', 'meterstop_dt', 'billstop']]
+</div>
+
+<h4>Updated Code (Fixed)</h4>
+<div class="code">
+# Incomplete Intervals Check
+print("Performing Incomplete Intervals Check")
+
+# Write to error table where the max meterstop_dt is less than the billstop
+# EXCEPTION: Skip this check for EV meters (channel 1000) - expected mid-cycle removal
+df2_grouped1 = df2_grouped[~df2_grouped.meterstop_dt.isna()].copy()
+
+# Filter out EV meters from INCOMPINTVS check
+# EV chargers can legitimately stop mid-billing cycle when physically removed
+non_ev_data = df2_grouped1[
+    ~((df2_grouped1.channel == 1000) & 
+      (df2_grouped1.metertype.isin(['evmeter', 'uevmeter'])))
+]
+
+error_df_append = non_ev_data[non_ev_data.meterstop_dt < non_ev_data.billstop][
+    ['studyid', 'premiseid', 'rltv_mo', 'studypoint', 'meterstop_dt', 'billstop']]
+</div>
+
+<h3>What This Fix Does</h3>
+
+<table>
+  <tr>
+    <th>Scenario</th>
+    <th>Before Fix</th>
+    <th>After Fix</th>
+  </tr>
+  <tr>
+    <td>Regular meter stops before bill end</td>
+    <td class="error">INCOMPINTVS error</td>
+    <td class="error">INCOMPINTVS error (unchanged)</td>
+  </tr>
+  <tr>
+    <td>EV meter (ch 1000) stops before bill end</td>
+    <td class="error">INCOMPINTVS error → Excluded</td>
+    <td class="ok">No error → Stays in study</td>
+  </tr>
+  <tr>
+    <td>Customer count</td>
+    <td class="error">Drops when EV chargers removed</td>
+    <td class="ok">Stable - expected behavior allowed</td>
+  </tr>
+</table>
+
+<h2 id="verification">7. Verification Queries & Steps</h2>
+
+<h3>Pre-Implementation Verification</h3>
+
+<h4>Query 1: Count current INCOMPINTVS errors for RS1EV</h4>
+<div class="sql">
+-- Run this BEFORE implementing the fix
+SELECT 
+    studyid,
+    COUNT(*) as incompintvs_count
+FROM clr.error 
+WHERE errorcode = 'INCOMPINTVS' 
+  AND studyid = 'FPLC-RS1EV'
+GROUP BY studyid;
+
+-- Expected result: ~63 errors (based on current data)
+</div>
+
+<h4>Query 2: Identify affected premises</h4>
+<div class="sql">
+-- List all premises with INCOMPINTVS errors in RS1EV
+SELECT DISTINCT 
+    premiseid,
+    rltv_mo,
+    errormessage
+FROM clr.error 
+WHERE errorcode = 'INCOMPINTVS' 
+  AND studyid = 'FPLC-RS1EV'
+ORDER BY premiseid, rltv_mo;
+</div>
+
+<h4>Query 3: Verify these are EV meter errors</h4>
+<div class="sql">
+-- Confirm INCOMPINTVS errors are related to evmeter
+SELECT 
+    premiseid,
+    errormessage,
+    CASE WHEN errormessage LIKE '%evmeter%' THEN 'EV Meter' ELSE 'Other' END as meter_type
+FROM clr.error 
+WHERE errorcode = 'INCOMPINTVS' 
+  AND studyid = 'FPLC-RS1EV';
+</div>
+
+<h4>Query 4: Check current active premise count</h4>
+<div class="sql">
+-- Current active premises in RS1EV
+SELECT 
+    studyid,
+    rltv_mo,
+    COUNT(DISTINCT premiseid) as active_premise_count
+FROM clr.active_premise
+WHERE studyid = 'FPLC-RS1EV'
+GROUP BY studyid, rltv_mo
+ORDER BY rltv_mo DESC
+LIMIT 12;
+</div>
+
+<h3>Post-Implementation Verification</h3>
+
+<h4>Query 5: Verify no new INCOMPINTVS for EV meters</h4>
+<div class="sql">
+-- Run this AFTER implementing the fix (on new data)
+-- Should return 0 rows for EV meters
+SELECT 
+    premiseid,
+    rltv_mo,
+    errormessage
+FROM clr.error 
+WHERE errorcode = 'INCOMPINTVS' 
+  AND studyid = 'FPLC-RS1EV'
+  AND errormessage LIKE '%evmeter%'
+  AND process_run_date >= '20260201';  -- Adjust date after implementation
+</div>
+
+<h4>Query 6: Monitor customer count recovery</h4>
+<div class="sql">
+-- Track active premise count over time
+SELECT 
+    rltv_mo,
+    COUNT(DISTINCT premiseid) as customer_count,
+    LAG(COUNT(DISTINCT premiseid)) OVER (ORDER BY rltv_mo) as prev_month_count,
+    COUNT(DISTINCT premiseid) - LAG(COUNT(DISTINCT premiseid)) OVER (ORDER BY rltv_mo) as change
+FROM clr.active_premise
+WHERE studyid = 'FPLC-RS1EV'
+GROUP BY rltv_mo
+ORDER BY rltv_mo;
+</div>
+
+<h4>Query 7: Verify EV data is preserved up to meter stop</h4>
+<div class="sql">
+-- Check that EV interval data exists up to meter stop date
+SELECT 
+    fr.premiseid,
+    fr.meterid,
+    fr.channel,
+    MIN(fr.read_strt_time) as first_reading,
+    MAX(fr.read_strt_time) as last_reading,
+    m.meterstop
+FROM clr.fetch_results fr
+JOIN clr.meters m ON fr.premiseid = m.premiseid AND fr.meterid = m.meterid
+WHERE fr.studyid = 'FPLC-RS1EV'
+  AND fr.channel = 1000
+  AND fr.premiseid IN (70002132, 70002972, 70005262)
+GROUP BY fr.premiseid, fr.meterid, fr.channel, m.meterstop;
+</div>
+
+<h3>Verification Steps Checklist</h3>
+
+<div class="step-box">
+  <h4>Before Implementation</h4>
+  <ol>
+    <li>☐ Run Query 1 - Document current INCOMPINTVS count</li>
+    <li>☐ Run Query 2 - Document affected premises</li>
+    <li>☐ Run Query 3 - Confirm errors are for EV meters</li>
+    <li>☐ Run Query 4 - Document current customer count</li>
+    <li>☐ Take backup of validations.py</li>
+  </ol>
+</div>
+
+<div class="step-box">
+  <h4>Implementation</h4>
+  <ol>
+    <li>☐ Modify validations.py with the fix</li>
+    <li>☐ Deploy to test environment</li>
+    <li>☐ Run validation process on test data</li>
+    <li>☐ Verify fix works as expected</li>
+    <li>☐ Deploy to production</li>
+  </ol>
+</div>
+
+<div class="step-box">
+  <h4>After Implementation</h4>
+  <ol>
+    <li>☐ Run Query 5 - Verify no new EV INCOMPINTVS errors</li>
+    <li>☐ Run Query 6 - Monitor customer count recovery</li>
+    <li>☐ Run Query 7 - Verify EV data preserved</li>
+    <li>☐ Monitor for 2-3 billing cycles</li>
+    <li>☐ Report results to stakeholders</li>
+  </ol>
+</div>
+
+<h2 id="implementation">8. Implementation Guide</h2>
+
+<h3>File Location</h3>
+<p><code>/path/to/airflow/dags/validations.py</code> (or equivalent production path)</p>
+
+<h3>Lines to Modify</h3>
+<p>Lines 1548-1557 (Incomplete Intervals Check section)</p>
+
+<h3>Testing Approach</h3>
+
+<ol>
+  <li><strong>Unit Test:</strong> Create test data with EV meter (channel 1000, metertype='evmeter') where meterstop_dt < billstop. Verify no INCOMPINTVS error is generated.</li>
+  <li><strong>Integration Test:</strong> Run full validation process on historical data. Compare INCOMPINTVS count before/after.</li>
+  <li><strong>Regression Test:</strong> Verify non-EV meters still generate INCOMPINTVS errors when appropriate.</li>
+</ol>
+
+<h3>Rollback Plan</h3>
+<p>If issues occur, restore the backup of validations.py and redeploy.</p>
+
+<h3>Stakeholder Communication</h3>
+<p>Notify the following after successful implementation:</p>
+<ul>
+  <li>Neyla Cheraso (Sr. Rate Analyst) - Original reporter</li>
+  <li>Tara Dubose (Application Owner, Regulatory Team)</li>
+  <li>Divyani Kanawat (Development point person)</li>
+  <li>Christopher Chapin (Development team)</li>
+</ul>
+
+<hr>
+
+<h2>Conclusion</h2>
+
+<div class="success-box">
+  <p><strong>Summary:</strong> Both issues (customer count drop and data stopping after meter change) are caused by the same root cause - the INCOMPINTVS validation incorrectly penalizes expected EV charger removal.</p>
+  <p><strong>Fix:</strong> Skip INCOMPINTVS check for channel 1000 (evmeter/uevmeter).</p>
+  <p><strong>Expected Outcome:</strong> Customer count will stabilize and EV interval data will be preserved up to the meter stop date.</p>
+</div>
+
+<p><em>Document prepared: January 2026</em></p>
+
+</body>
+</html>

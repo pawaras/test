@@ -1,0 +1,562 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="UTF-8">
+  <title>ALR RS1EV FPLNW Issue - Complete Root Cause Analysis (Final)</title>
+  <style>
+    body { font-family: Arial, sans-serif; font-size: 14px; color: #333; line-height: 1.6; max-width: 1400px; margin: 0 auto; padding: 20px; }
+    h1 { color: #1f4e79; border-bottom: 3px solid #1f4e79; padding-bottom: 10px; }
+    h2 { color: #1f4e79; border-bottom: 2px solid #ddd; padding-bottom: 4px; margin-top: 30px; }
+    h3 { color: #2f5597; margin-top: 20px; }
+    h4 { color: #404040; margin-top: 15px; }
+    table { border-collapse: collapse; width: 100%; margin-top: 10px; margin-bottom: 15px; font-size: 13px; }
+    th, td { border: 1px solid #ccc; padding: 8px; text-align: left; vertical-align: top; }
+    th { background-color: #1f4e79; color: white; }
+    tr:nth-child(even) { background-color: #f9f9f9; }
+    .ok { color: green; font-weight: bold; }
+    .error { color: #c00000; font-weight: bold; }
+    .warning { color: #ff8c00; font-weight: bold; }
+    .info { color: #0066cc; font-weight: bold; }
+    .note { background-color: #e7f3ff; border-left: 4px solid #1f4e79; padding: 12px; margin: 15px 0; }
+    .warning-box { background-color: #fff3cd; border-left: 4px solid #ff8c00; padding: 12px; margin: 15px 0; }
+    .success-box { background-color: #d4edda; border-left: 4px solid #28a745; padding: 12px; margin: 15px 0; }
+    .error-box { background-color: #f8d7da; border-left: 4px solid #dc3545; padding: 12px; margin: 15px 0; }
+    .info-box { background-color: #d1ecf1; border-left: 4px solid #17a2b8; padding: 12px; margin: 15px 0; }
+    .code { background-color: #f4f4f4; border: 1px solid #ccc; padding: 15px; font-family: Consolas, monospace; font-size: 13px; overflow-x: auto; white-space: pre-wrap; margin: 10px 0; }
+    .sql { background-color: #f8f8f8; border: 1px solid #ddd; padding: 15px; font-family: Consolas, monospace; font-size: 12px; overflow-x: auto; white-space: pre-wrap; margin: 10px 0; }
+    .toc { background-color: #f5f5f5; padding: 20px; border-radius: 5px; margin-bottom: 30px; }
+    .toc ul { list-style-type: none; padding-left: 0; }
+    .toc li { margin: 8px 0; }
+    .toc a { color: #1f4e79; text-decoration: none; }
+    .category-box { border: 2px solid; border-radius: 8px; padding: 15px; margin: 15px 0; }
+    .cat-red { border-color: #dc3545; background-color: #fff5f5; }
+    .cat-orange { border-color: #ff8c00; background-color: #fff8f0; }
+    .cat-blue { border-color: #17a2b8; background-color: #f0f8ff; }
+    .cat-green { border-color: #28a745; background-color: #f0fff0; }
+    .cat-purple { border-color: #6f42c1; background-color: #f8f5ff; }
+    .small-table { font-size: 12px; }
+    .small-table td, .small-table th { padding: 5px; }
+    .two-col { display: flex; gap: 20px; }
+    .two-col > div { flex: 1; }
+  </style>
+</head>
+<body>
+
+<h1>ALR RS1EV FPLNW Issue - Complete Root Cause Analysis</h1>
+
+<p><strong>Date:</strong> January 2026<br>
+<strong>Study:</strong> FPLC-RS1EV (FPLNW EV Customers)<br>
+<strong>Data Sources:</strong> RS1EV_FPLNW_Customers.xlsx, error_table.csv, fetch_results.csv</p>
+
+<div class="toc">
+  <h3>Table of Contents</h3>
+  <ul>
+    <li><a href="#executive-summary">1. Executive Summary - TWO ISSUES IDENTIFIED</a></li>
+    <li><a href="#issue-a">2. Issue A: INCOMPINTVS Validation (61 premises)</a></li>
+    <li><a href="#issue-b">3. Issue B: KWH=0 Data Fetch (6 premises)</a></li>
+    <li><a href="#other-categories">4. Other Categories (32 premises)</a></li>
+    <li><a href="#evidence">5. Evidence from fetch_results.csv</a></li>
+    <li><a href="#solutions">6. Recommended Solutions</a></li>
+    <li><a href="#verification">7. Verification Queries</a></li>
+  </ul>
+</div>
+
+<h2 id="executive-summary">1. Executive Summary - TWO ISSUES IDENTIFIED</h2>
+
+<div class="error-box">
+  <h3>Critical Finding: TWO Distinct Root Causes</h3>
+  <p>Analysis of fetch_results.csv reveals <strong>two separate issues</strong> affecting FPLNW EV customers:</p>
+</div>
+
+<table>
+  <tr>
+    <th>Issue</th>
+    <th>Type</th>
+    <th>Premises</th>
+    <th>Root Cause</th>
+    <th>Fix Required</th>
+  </tr>
+  <tr>
+    <td class="error">Issue A: INCOMPINTVS</td>
+    <td>Validation Error</td>
+    <td class="error">61 (62%)</td>
+    <td>Validation incorrectly flags EV meter removal as error</td>
+    <td class="error">Code Fix - validations.py</td>
+  </tr>
+  <tr>
+    <td class="warning">Issue B: KWH=0</td>
+    <td>Data Fetch Error</td>
+    <td class="warning">6 (6%)</td>
+    <td>EV interval data not being retrieved (kwh=0 for all records)</td>
+    <td class="warning">Investigate gulf_daily.json query</td>
+  </tr>
+  <tr>
+    <td>KWH Partial Zero</td>
+    <td>Intermittent Data</td>
+    <td>17 (17%)</td>
+    <td>Some months have kwh=0, others have data</td>
+    <td>Monitor / Investigate</td>
+  </tr>
+  <tr>
+    <td>DIFFBILLCOMP Only</td>
+    <td>Data Quality</td>
+    <td>8 (8%)</td>
+    <td>Interval ≠ billed usage >10%</td>
+    <td>No code fix needed</td>
+  </tr>
+  <tr>
+    <td class="ok">Working Correctly</td>
+    <td>No Issues</td>
+    <td>7 (7%)</td>
+    <td>N/A</td>
+    <td class="ok">None</td>
+  </tr>
+</table>
+
+<h2 id="issue-a">2. Issue A: INCOMPINTVS Validation (61 premises) - CODE FIX REQUIRED</h2>
+
+<div class="category-box cat-red">
+  <h3>Problem</h3>
+  <p>When an EV charger is physically removed mid-billing cycle, the validation code flags this as an INCOMPINTVS error and <strong>excludes the premise from the study</strong>.</p>
+  
+  <h3>Evidence from fetch_results.csv</h3>
+  <p>The fetch_results data proves that <strong>data IS being fetched correctly</strong> up to the meter stop date. The issue is the validation treating this expected behavior as an error.</p>
+</div>
+
+<h3>Sample Evidence: meterstop_dt vs billstop</h3>
+
+<table class="small-table">
+  <tr>
+    <th>Premise ID</th>
+    <th>rltv_mo</th>
+    <th>meterstop_dt</th>
+    <th>billstop</th>
+    <th>Gap (days)</th>
+    <th>kwh</th>
+    <th>Issue</th>
+  </tr>
+  <tr>
+    <td>70002132</td>
+    <td>202504</td>
+    <td>2025-04-15</td>
+    <td>2025-04-28</td>
+    <td class="error">13</td>
+    <td>240.69</td>
+    <td>Meter stopped 13 days before bill end</td>
+  </tr>
+  <tr>
+    <td>70002972</td>
+    <td>202504</td>
+    <td>2025-04-16</td>
+    <td>2025-04-07</td>
+    <td>-9</td>
+    <td>343.61</td>
+    <td>Meter stopped after bill end (OK)</td>
+  </tr>
+  <tr>
+    <td>70054710</td>
+    <td>202504</td>
+    <td>2025-04-09</td>
+    <td>2025-04-25</td>
+    <td class="error">16</td>
+    <td>193.39</td>
+    <td>Meter stopped 16 days before bill end</td>
+  </tr>
+  <tr>
+    <td>70023774</td>
+    <td>202504</td>
+    <td>2025-04-15</td>
+    <td>2025-04-25</td>
+    <td class="error">10</td>
+    <td>314.59</td>
+    <td>Meter stopped 10 days before bill end</td>
+  </tr>
+  <tr>
+    <td>70005262</td>
+    <td>202505</td>
+    <td>2025-04-11</td>
+    <td>2025-05-02</td>
+    <td class="error">21</td>
+    <td>8.55</td>
+    <td>Meter stopped 21 days before bill end</td>
+  </tr>
+</table>
+
+<div class="note">
+  <strong>Key Observation:</strong> The kwh column shows that data WAS fetched (non-zero values). The issue is the validation logic, not data retrieval.
+</div>
+
+<h3>All 61 Affected Premises</h3>
+<p style="font-size: 12px; word-wrap: break-word;">
+70002132, 70002972, 70005262, 70006394, 70015395, 70018169, 70023774, 70033295, 70034973, 70042144, 70053071, 70054710, 70065960, 70079357, 70079762, 70086869, 70108228, 70124001, 70141101, 70148257, 70148787, 70154475, 70158196, 70161092, 70172234, 70214556, 70223560, 70235805, 70242233, 70262914, 70267182, 70274649, 70278954, 70281751, 70287401, 70287589, 70336847, 70346117, 70395351, 70398499, 70405603, 70410467, 70419109, 70451835, 70471371, 70477799, 70484718, 70502810, 70511895, 70530764, 70552450, 70576603, 70577611, 70597182, 70602615, 70607810, 70626774, 70627943, 70633535, 70646976, 70651418
+</p>
+
+<h2 id="issue-b">3. Issue B: KWH=0 Data Fetch (6 premises) - INVESTIGATION REQUIRED</h2>
+
+<div class="category-box cat-orange">
+  <h3>Problem</h3>
+  <p>These premises have fetch_results records for channel 1000 (EV), but <strong>kwh = 0 for ALL records</strong>. The EV interval data is NOT being retrieved even though the record structure exists.</p>
+  
+  <h3>This is a DIFFERENT issue from INCOMPINTVS</h3>
+  <p>The INCOMPINTVS fix will NOT help these premises. They need investigation of the data fetch query in <code>gulf_daily.json</code>.</p>
+</div>
+
+<h3>Affected Premises</h3>
+
+<table>
+  <tr>
+    <th>Premise ID</th>
+    <th>RS1EV Records</th>
+    <th>All kwh=0?</th>
+    <th>RSEV ch1 kwh</th>
+    <th>Issue</th>
+  </tr>
+  <tr>
+    <td class="warning">70593045</td>
+    <td>10</td>
+    <td class="error">YES</td>
+    <td>43,127 (working)</td>
+    <td>EV data not retrieved</td>
+  </tr>
+  <tr>
+    <td class="warning">70674364</td>
+    <td>5</td>
+    <td class="error">YES</td>
+    <td>19,359 (working)</td>
+    <td>EV data not retrieved</td>
+  </tr>
+  <tr>
+    <td class="warning">70664193</td>
+    <td>9</td>
+    <td class="error">YES</td>
+    <td>21,491 (working)</td>
+    <td>EV data not retrieved</td>
+  </tr>
+  <tr>
+    <td class="warning">70670026</td>
+    <td>5</td>
+    <td class="error">YES</td>
+    <td>12,571 (working)</td>
+    <td>EV data not retrieved</td>
+  </tr>
+  <tr>
+    <td class="warning">70669597</td>
+    <td>2</td>
+    <td class="error">YES</td>
+    <td>15,764 (working)</td>
+    <td>EV data not retrieved</td>
+  </tr>
+  <tr>
+    <td class="warning">70663090</td>
+    <td>1</td>
+    <td class="error">YES</td>
+    <td>2,059 (working)</td>
+    <td>EV data not retrieved</td>
+  </tr>
+</table>
+
+<h3>Evidence: Premise 70593045</h3>
+
+<table class="small-table">
+  <tr>
+    <th>Study</th>
+    <th>Channel</th>
+    <th>rltv_mo</th>
+    <th>meterid</th>
+    <th>metertype</th>
+    <th>kwh</th>
+  </tr>
+  <tr>
+    <td>RS1EV</td>
+    <td>1000</td>
+    <td>202509</td>
+    <td>5842465</td>
+    <td>577018.0</td>
+    <td class="error">0.0</td>
+  </tr>
+  <tr>
+    <td>RS1EV</td>
+    <td>1000</td>
+    <td>202512</td>
+    <td>5842465</td>
+    <td>577018.0</td>
+    <td class="error">0.0</td>
+  </tr>
+  <tr>
+    <td>RS1EV</td>
+    <td>1000</td>
+    <td>202508</td>
+    <td>5842465</td>
+    <td>577018.0</td>
+    <td class="error">0.0</td>
+  </tr>
+  <tr>
+    <td>RSEV</td>
+    <td>1</td>
+    <td>202509</td>
+    <td>5842465</td>
+    <td>577018.0</td>
+    <td class="ok">2315.52</td>
+  </tr>
+  <tr>
+    <td>RSEV</td>
+    <td>1</td>
+    <td>202512</td>
+    <td>5842465</td>
+    <td>577018.0</td>
+    <td class="ok">1577.32</td>
+  </tr>
+</table>
+
+<div class="warning-box">
+  <strong>Note:</strong> The billing meter (channel 1, RSEV) has positive kwh values, proving the premise has actual usage. But the EV channel 1000 has kwh=0 - indicating a data fetch issue specific to EV interval data.
+</div>
+
+<h3>Likely Root Cause for Issue B</h3>
+<p>The EV data fetch query in <code>gulf_daily.json</code> has restrictive JOIN conditions:</p>
+
+<div class="code">
+JOIN billing_fpl_fplnw_consolidated.ev_charge_box CB 
+  ON RH.charge_box_id = CB.charge_box_id 
+  AND CB.connector_id = RH.connector_id 
+  AND CB.site_pk = RH.site_pk 
+  AND RH.read_strt_dttm BETWEEN CB.efct_strt_dttm AND CB.efct_end_dttm
+</div>
+
+<p>Possible causes:</p>
+<ul>
+  <li>charge_box_id mismatch between ev_read_hist and ev_charge_box</li>
+  <li>Time bounds (efct_strt_dttm/efct_end_dttm) don't overlap with readings</li>
+  <li>asset_status = 'Asset In-Service' filter excludes some devices</li>
+  <li>sub_comp_cd = 1600 filter doesn't match some devices</li>
+</ul>
+
+<h2 id="other-categories">4. Other Categories (32 premises)</h2>
+
+<h3>4.1 Partial KWH=0 (17 premises)</h3>
+<div class="category-box cat-blue">
+  <p>These premises have some months with kwh=0 and some with actual data. This could indicate:</p>
+  <ul>
+    <li>Intermittent EV charger usage</li>
+    <li>Partial data fetch issues</li>
+    <li>Meter changes during the period</li>
+  </ul>
+  <p><strong>Action:</strong> Monitor and investigate on case-by-case basis.</p>
+</div>
+
+<h3>4.2 DIFFBILLCOMP Only (8 premises)</h3>
+<div class="category-box cat-blue">
+  <p>These premises have DIFFBILLCOMP errors (interval data differs from billed usage by >10%) but NO INCOMPINTVS errors.</p>
+  <p><strong>Impact:</strong> Data quality flag only - NOT excluded from study.</p>
+  <p><strong>Action:</strong> No code fix needed. Investigate data sources if desired.</p>
+</div>
+
+<h3>4.3 Working Correctly (7 premises)</h3>
+<div class="category-box cat-green">
+  <p>These premises have positive kwh values and no validation errors. They are working as expected.</p>
+  <p><strong>Action:</strong> None required.</p>
+</div>
+
+<h2 id="evidence">5. Evidence from fetch_results.csv</h2>
+
+<h3>Data Overview</h3>
+<table>
+  <tr>
+    <th>Metric</th>
+    <th>Value</th>
+  </tr>
+  <tr>
+    <td>Total fetch_results records</td>
+    <td>4,963</td>
+  </tr>
+  <tr>
+    <td>RS1EV records</td>
+    <td>1,482</td>
+  </tr>
+  <tr>
+    <td>RS1EV unique premises</td>
+    <td>99</td>
+  </tr>
+  <tr>
+    <td>RS1EV channel</td>
+    <td>All 1000 (EV)</td>
+  </tr>
+</table>
+
+<h3>Key Findings</h3>
+<ol>
+  <li><strong>INCOMPINTVS premises DO have fetch data</strong> - The kwh values are positive, proving data was fetched up to meterstop_dt</li>
+  <li><strong>KWH=0 premises have fetch records but NO actual data</strong> - The record structure exists but interval data wasn't retrieved</li>
+  <li><strong>The two issues are distinct</strong> - One is validation logic, one is data fetch logic</li>
+</ol>
+
+<h2 id="solutions">6. Recommended Solutions</h2>
+
+<h3>Solution A: Fix INCOMPINTVS Validation (61 premises)</h3>
+
+<div class="error-box">
+  <p><strong>Priority:</strong> HIGH - Affects 61 premises (62%)</p>
+  <p><strong>Effort:</strong> LOW - Code change in validations.py</p>
+</div>
+
+<p><strong>File:</strong> <code>validations.py</code> lines 1548-1557</p>
+
+<h4>Current Code</h4>
+<div class="code">
+df2_grouped1 = df2_grouped[~df2_grouped.meterstop_dt.isna()].copy()
+error_df_append = df2_grouped1[df2_grouped1.meterstop_dt < df2_grouped1.billstop][
+    ['studyid', 'premiseid', 'rltv_mo', 'studypoint', 'meterstop_dt', 'billstop']]
+</div>
+
+<h4>Fixed Code</h4>
+<div class="code">
+df2_grouped1 = df2_grouped[~df2_grouped.meterstop_dt.isna()].copy()
+
+# Skip INCOMPINTVS check for EV meters (channel 1000)
+# EV chargers can legitimately stop mid-billing cycle when physically removed
+non_ev_data = df2_grouped1[
+    ~((df2_grouped1.channel == 1000) & 
+      (df2_grouped1.metertype.isin(['evmeter', 'uevmeter'])))
+]
+
+error_df_append = non_ev_data[non_ev_data.meterstop_dt < non_ev_data.billstop][
+    ['studyid', 'premiseid', 'rltv_mo', 'studypoint', 'meterstop_dt', 'billstop']]
+</div>
+
+<h3>Solution B: Investigate KWH=0 Data Fetch (6 premises)</h3>
+
+<div class="warning-box">
+  <p><strong>Priority:</strong> MEDIUM - Affects 6 premises (6%)</p>
+  <p><strong>Effort:</strong> MEDIUM - Requires investigation of data sources</p>
+</div>
+
+<p><strong>Investigation Steps:</strong></p>
+<ol>
+  <li>Check if charge_box records exist for these premises in ev_charge_box table</li>
+  <li>Verify efct_strt_dttm and efct_end_dttm time bounds overlap with billing periods</li>
+  <li>Check asset_status values for these devices</li>
+  <li>Verify sub_comp_cd values match the filter (1600)</li>
+</ol>
+
+<h4>Diagnostic Query</h4>
+<div class="sql">
+-- Check charge_box records for affected premises
+SELECT s.site_id as premiseid, 
+       cb.charge_box_id, 
+       cb.efct_strt_dttm, 
+       cb.efct_end_dttm, 
+       cb.asset_status, 
+       cb.sub_comp_cd
+FROM billing_fpl_fplnw_consolidated.ev_charge_box cb
+JOIN billing_fpl_fplnw_consolidated.ev_site s ON cb.site_pk = s.site_pk
+WHERE s.site_id IN ('70593045', '70674364', '70664193', '70670026', '70669597', '70663090');
+
+-- Check if readings exist in ev_read_hist
+SELECT s.site_id as premiseid, 
+       COUNT(*) as reading_count,
+       MIN(rh.read_strt_dttm) as first_reading,
+       MAX(rh.read_strt_dttm) as last_reading
+FROM billing_fpl_fplnw_consolidated.ev_read_hist rh
+JOIN billing_fpl_fplnw_consolidated.ev_site s ON rh.site_pk = s.site_pk
+WHERE s.site_id IN ('70593045', '70674364', '70664193', '70670026', '70669597', '70663090')
+GROUP BY s.site_id;
+</div>
+
+<h2 id="verification">7. Verification Queries</h2>
+
+<h3>Pre-Implementation (Issue A)</h3>
+
+<div class="sql">
+-- Count current INCOMPINTVS errors
+SELECT COUNT(*) as incompintvs_count,
+       COUNT(DISTINCT premiseid) as premise_count
+FROM clr.error 
+WHERE errorcode = 'INCOMPINTVS' 
+  AND studyid = 'FPLC-RS1EV';
+-- Expected: 63 errors, 61 premises
+
+-- Verify these are EV meter errors
+SELECT premiseid, meterstop_dt, billstop
+FROM clr.fetch_results
+WHERE studyid = 'FPLC-RS1EV'
+  AND channel = 1000
+  AND meterstop_dt < billstop
+  AND meterstop_dt != '9999-12-31';
+</div>
+
+<h3>Post-Implementation (Issue A)</h3>
+
+<div class="sql">
+-- Verify no new INCOMPINTVS for EV meters after fix
+SELECT COUNT(*) as new_incompintvs
+FROM clr.error 
+WHERE errorcode = 'INCOMPINTVS' 
+  AND studyid = 'FPLC-RS1EV'
+  AND process_run_date >= '20260201';
+-- Expected: 0
+
+-- Monitor customer count recovery
+SELECT rltv_mo, COUNT(DISTINCT premiseid) as customer_count
+FROM clr.active_premise
+WHERE studyid = 'FPLC-RS1EV'
+GROUP BY rltv_mo
+ORDER BY rltv_mo;
+-- Expected: Count should increase toward 100+
+</div>
+
+<h3>Issue B Investigation</h3>
+
+<div class="sql">
+-- Identify premises with kwh=0 in fetch_results
+SELECT premiseid, 
+       COUNT(*) as record_count,
+       SUM(kwh) as total_kwh
+FROM clr.fetch_results
+WHERE studyid = 'FPLC-RS1EV'
+  AND channel = 1000
+GROUP BY premiseid
+HAVING SUM(kwh) = 0;
+</div>
+
+<hr>
+
+<h2>Summary</h2>
+
+<div class="success-box">
+  <h3>Two Issues Identified</h3>
+  
+  <table>
+    <tr>
+      <th>Issue</th>
+      <th>Premises</th>
+      <th>Root Cause</th>
+      <th>Solution</th>
+      <th>Priority</th>
+    </tr>
+    <tr>
+      <td class="error">A: INCOMPINTVS</td>
+      <td>61</td>
+      <td>Validation error</td>
+      <td>Fix validations.py</td>
+      <td class="error">HIGH</td>
+    </tr>
+    <tr>
+      <td class="warning">B: KWH=0</td>
+      <td>6</td>
+      <td>Data fetch error</td>
+      <td>Investigate gulf_daily.json</td>
+      <td class="warning">MEDIUM</td>
+    </tr>
+  </table>
+  
+  <h3>Expected Outcome</h3>
+  <ul>
+    <li>After Issue A fix: 61 premises will no longer be excluded → customer count should recover</li>
+    <li>After Issue B fix: 6 premises will have actual EV usage data</li>
+  </ul>
+</div>
+
+<p><em>Document prepared: January 2026</em></p>
+
+</body>
+</html>
