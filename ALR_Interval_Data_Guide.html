@@ -1,0 +1,420 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="UTF-8">
+  <title>ALR Interval Data - How It's Generated & Where to Check</title>
+  <style>
+    body { font-family: Arial, sans-serif; font-size: 14px; color: #333; line-height: 1.6; max-width: 1200px; margin: 0 auto; padding: 20px; }
+    h1 { color: #1f4e79; border-bottom: 3px solid #1f4e79; padding-bottom: 10px; }
+    h2 { color: #1f4e79; border-bottom: 2px solid #ddd; padding-bottom: 4px; margin-top: 30px; }
+    h3 { color: #2f5597; margin-top: 20px; }
+    table { border-collapse: collapse; width: 100%; margin: 15px 0; }
+    th, td { border: 1px solid #ccc; padding: 10px; text-align: left; }
+    th { background-color: #1f4e79; color: white; }
+    tr:nth-child(even) { background-color: #f9f9f9; }
+    .code { background-color: #f4f4f4; border: 1px solid #ccc; padding: 15px; font-family: Consolas, monospace; font-size: 12px; overflow-x: auto; white-space: pre-wrap; margin: 10px 0; border-radius: 4px; }
+    .note { background-color: #e7f3ff; border-left: 4px solid #1f4e79; padding: 12px; margin: 15px 0; }
+    .warning { background-color: #fff3cd; border-left: 4px solid #ff8c00; padding: 12px; margin: 15px 0; }
+    .success { background-color: #d4edda; border-left: 4px solid #28a745; padding: 12px; margin: 15px 0; }
+    .flow-box { background-color: #f8f9fa; border: 2px solid #1f4e79; border-radius: 8px; padding: 15px; margin: 15px 0; }
+    .source-box { background-color: #fff5f5; border: 1px solid #dc3545; padding: 10px; margin: 10px 0; border-radius: 4px; }
+    ul { margin: 10px 0; }
+    li { margin: 5px 0; }
+  </style>
+</head>
+<body>
+
+<h1>ALR Interval Data - How It's Generated & Where to Check</h1>
+
+<p><strong>Based on:</strong> ALR_Technical_Guide.docx, ALR_User_Documentation.docx, gulf_daily.json, aman.zip code files</p>
+
+<hr>
+
+<h2>1. Overview: How Interval Data is Generated</h2>
+
+<div class="flow-box">
+  <h3>Data Flow Pipeline</h3>
+  <p><strong>Step 1:</strong> Airflow DAG (<code>load_research_data_fetch_dag.py</code>) triggers daily at 18:30 UTC</p>
+  <p><strong>Step 2:</strong> EMR Spark job reads SQL queries from <code>gulf_daily.json</code> (for FPLNW) or <code>fpl_daily.json</code> (for FPL)</p>
+  <p><strong>Step 3:</strong> Data is fetched from source systems (Greenplum, SAP HANA, S4)</p>
+  <p><strong>Step 4:</strong> Interpolation fills missing intervals (<code>interpolation.py</code>)</p>
+  <p><strong>Step 5:</strong> Validations run checks (<code>validations.py</code>)</p>
+  <p><strong>Step 6:</strong> Results written to ALR PostgreSQL database (fetch_results, premise_usage, error tables)</p>
+</div>
+
+<h2>2. Source Systems for Interval Data</h2>
+
+<h3>2.1 For Regular Meters (Channels 1, 2, 4, 9)</h3>
+
+<div class="source-box">
+  <strong>Source:</strong> Greenplum - <code>utl.v_meter_duration_read_fact_nw_2yc</code>
+</div>
+
+<div class="code">
+-- From gulf_daily.json (process_order: 8)
+SELECT 'FPLNW' as metertype, 
+       read_strt_time, 
+       mrdg, 
+       mtr_id as meterid, 
+       CASE 
+         WHEN (lower(uom) = 'kwh' and uiq_chnl_num is null) or uiq_chnl_num = 2 THEN 2
+         WHEN lower(uom) = 'gkwh' or uiq_chnl_num = 4 THEN 4
+         WHEN lower(uom) = 'skwh' or (uiq_chnl_num = 1) THEN 1 
+       END as channel
+FROM utl.v_meter_duration_read_fact_nw_2yc
+WHERE read_strt_time >= '{fetch_from_date}'
+  AND read_strt_time <= '{fetch_to_date}' + 1
+  AND lower(uom) in ('skwh','kwh','gkwh')
+  AND mrdg >= 0
+</div>
+
+<h3>2.2 For EV Meters (Channel 1000)</h3>
+
+<div class="source-box">
+  <strong>Source:</strong> Greenplum - <code>billing_fpl_fplnw_consolidated</code> schema
+  <br><strong>Tables:</strong> ev_read_hist, ev_site, ev_charge_box
+</div>
+
+<div class="code">
+-- From gulf_daily.json (process_order: 8) - EV section
+SELECT 'evmeter' as metertype, 
+       RH.read_strt_dttm, 
+       CASE WHEN lower(uom) = 'wh' THEN round(sum(mrdg), 4)/1000 
+            ELSE round(sum(mrdg), 4) END as mrdg, 
+       CB.charge_box_id as meterid, 
+       1000 as channel, 
+       'kwh' as uom, 
+       15 as spi
+FROM billing_fpl_fplnw_consolidated.ev_read_hist RH 
+JOIN billing_fpl_fplnw_consolidated.ev_site S 
+  ON RH.site_pk = S.site_pk 
+  AND RH.prod_id = S.prod_id 
+  AND S.crnt_row_flag = TRUE 
+JOIN billing_fpl_fplnw_consolidated.ev_charge_box CB 
+  ON RH.charge_box_id = CB.charge_box_id 
+  AND CB.connector_id = RH.connector_id 
+  AND CB.site_pk = RH.site_pk 
+  AND RH.read_strt_dttm BETWEEN CB.efct_strt_dttm AND CB.efct_end_dttm
+WHERE lower(uom) in ('kwh','wh') 
+  AND rh.read_strt_dttm >= '{fetch_from_date}'
+  AND rh.read_strt_dttm <= '{fetch_to_date}' + 1
+  AND mrdg >= 0
+GROUP BY S.site_id, CB.connector_type, RH.read_strt_dttm, CB.charge_box_id, uom
+</div>
+
+<div class="warning">
+  <strong>Important EV Data Filters:</strong>
+  <ul>
+    <li><code>asset_status = 'Asset In-Service'</code> - Only active devices</li>
+    <li><code>sub_comp_cd = 1600</code> - Specific component code</li>
+    <li><code>mrdg < 6</code> - Reading must be less than 6 kWh per interval (quality filter)</li>
+    <li>Time bounds: <code>read_strt_dttm BETWEEN efct_strt_dttm AND efct_end_dttm</code></li>
+  </ul>
+</div>
+
+<h3>2.3 For Meter Information</h3>
+
+<div class="source-box">
+  <strong>Source:</strong> Greenplum - CIS tables + EV tables
+</div>
+
+<div class="code">
+-- Meter information query from gulf_daily.json (process_order: 5)
+-- Regular meters: CIS tables (cis_raw.EANLH, cis_raw.EASTL, cis_raw.EGERH, etc.)
+-- EV meters: billing_fpl_fplnw_consolidated.ev_charge_box + ev_site
+</div>
+
+<h2>3. Where to Check Interval Data</h2>
+
+<h3>3.1 ALR PostgreSQL Database (Primary Location)</h3>
+
+<table>
+  <tr>
+    <th>Table</th>
+    <th>Level</th>
+    <th>Key Fields</th>
+    <th>Purpose</th>
+  </tr>
+  <tr>
+    <td><strong>clr.fetch_results</strong></td>
+    <td>Meter/Channel</td>
+    <td>studyid, premiseid, rltv_mo, meterid, channel, kwh, goodintvper, badintvper</td>
+    <td>Raw interval data at meter/channel level</td>
+  </tr>
+  <tr>
+    <td><strong>clr.premise_usage</strong></td>
+    <td>Premise/Bill</td>
+    <td>studyid, premiseid, rltv_mo, accountid, billkwh, intvkwh</td>
+    <td>Aggregated data at premise level</td>
+  </tr>
+  <tr>
+    <td><strong>clr.error</strong></td>
+    <td>Premise</td>
+    <td>studyid, premiseid, rltv_mo, errorcode, errordesc</td>
+    <td>Validation errors for interval data</td>
+  </tr>
+  <tr>
+    <td><strong>clr.active_premise</strong></td>
+    <td>Premise</td>
+    <td>studyid, premiseid, rltv_mo, current_flg</td>
+    <td>Active study participants</td>
+  </tr>
+</table>
+
+<h4>Sample Query - Check Interval Data</h4>
+<div class="code">
+-- Check fetch_results for a specific premise
+SELECT studyid, premiseid, rltv_mo, meterid, channel, metertype, 
+       kwh, goodintvper, badintvper, interpolper,
+       meterstart_dt, meterstop_dt, billstop
+FROM clr.fetch_results
+WHERE premiseid = 70002972
+  AND studyid = 'FPLC-RS1EV'
+ORDER BY rltv_mo;
+
+-- Check for errors
+SELECT studyid, premiseid, rltv_mo, errorcode, errordesc
+FROM clr.error
+WHERE premiseid = 70002972
+  AND studyid = 'FPLC-RS1EV';
+</div>
+
+<h3>3.2 Source Systems (For Debugging)</h3>
+
+<table>
+  <tr>
+    <th>Data Type</th>
+    <th>Database</th>
+    <th>Table/View</th>
+  </tr>
+  <tr>
+    <td>Regular Meter Intervals (FPLNW)</td>
+    <td>Greenplum</td>
+    <td><code>utl.v_meter_duration_read_fact_nw_2yc</code></td>
+  </tr>
+  <tr>
+    <td>EV Interval Readings</td>
+    <td>Greenplum</td>
+    <td><code>billing_fpl_fplnw_consolidated.ev_read_hist</code></td>
+  </tr>
+  <tr>
+    <td>EV Charge Box Info</td>
+    <td>Greenplum</td>
+    <td><code>billing_fpl_fplnw_consolidated.ev_charge_box</code></td>
+  </tr>
+  <tr>
+    <td>EV Site Info</td>
+    <td>Greenplum</td>
+    <td><code>billing_fpl_fplnw_consolidated.ev_site</code></td>
+  </tr>
+  <tr>
+    <td>Billing Data</td>
+    <td>SAP HANA</td>
+    <td><code>GULF_SAPS4.S4TBL/ZCV_S4TBL_ETTIFN</code></td>
+  </tr>
+</table>
+
+<h4>Sample Query - Check EV Source Data</h4>
+<div class="code">
+-- Check if EV readings exist in source (Greenplum)
+SELECT s.site_id as premiseid,
+       cb.charge_box_id as meterid,
+       rh.read_strt_dttm,
+       rh.mrdg,
+       rh.uom
+FROM billing_fpl_fplnw_consolidated.ev_read_hist rh
+JOIN billing_fpl_fplnw_consolidated.ev_site s ON rh.site_pk = s.site_pk
+JOIN billing_fpl_fplnw_consolidated.ev_charge_box cb 
+  ON rh.charge_box_id = cb.charge_box_id 
+  AND cb.connector_id = rh.connector_id
+WHERE s.site_id = '70002972'
+ORDER BY rh.read_strt_dttm;
+
+-- Check charge box configuration
+SELECT s.site_id as premiseid,
+       cb.charge_box_id,
+       cb.efct_strt_dttm,
+       cb.efct_end_dttm,
+       cb.asset_status,
+       cb.sub_comp_cd
+FROM billing_fpl_fplnw_consolidated.ev_charge_box cb
+JOIN billing_fpl_fplnw_consolidated.ev_site s ON cb.site_pk = s.site_pk
+WHERE s.site_id = '70002972';
+</div>
+
+<h3>3.3 S3 Buckets</h3>
+
+<table>
+  <tr>
+    <th>Bucket</th>
+    <th>Purpose</th>
+  </tr>
+  <tr>
+    <td><code>2fpv-lo174-alr-s3</code></td>
+    <td>Data input and output</td>
+  </tr>
+  <tr>
+    <td><code>2epv-lo174-cs-data-input-s3</code></td>
+    <td>Adhoc S3 bucket (FileZilla accessible)</td>
+  </tr>
+  <tr>
+    <td><code>2fpv-lo174-configurations-logs-s3</code></td>
+    <td>Configuration and logs</td>
+  </tr>
+</table>
+
+<h3>3.4 Monitoring & Logs</h3>
+
+<table>
+  <tr>
+    <th>Location</th>
+    <th>Purpose</th>
+  </tr>
+  <tr>
+    <td>Splunk: <code>2FPV-LO174-FPL-LR-LG</code></td>
+    <td>Application logs</td>
+  </tr>
+  <tr>
+    <td>MWAA DAG logs: <code>2mpv-lo174-fpl-lr-logs</code></td>
+    <td>Airflow DAG execution logs</td>
+  </tr>
+  <tr>
+    <td><code>clr.etl_log</code></td>
+    <td>Daily process tracking</td>
+  </tr>
+  <tr>
+    <td><code>clr.etl_backdated</code></td>
+    <td>Backdated process tracking</td>
+  </tr>
+</table>
+
+<h2>4. Channel Mapping</h2>
+
+<table>
+  <tr>
+    <th>Channel</th>
+    <th>Description</th>
+    <th>UOM</th>
+  </tr>
+  <tr>
+    <td>1</td>
+    <td>Standard kWh (non-net meter)</td>
+    <td>skwh</td>
+  </tr>
+  <tr>
+    <td>2</td>
+    <td>Delivered kWh (net meter)</td>
+    <td>kwh</td>
+  </tr>
+  <tr>
+    <td>4</td>
+    <td>Generated kWh (net meter)</td>
+    <td>gkwh</td>
+  </tr>
+  <tr>
+    <td>9</td>
+    <td>Net kWh (delivered - generated)</td>
+    <td>Calculated</td>
+  </tr>
+  <tr>
+    <td><strong>1000</strong></td>
+    <td><strong>EV Charger</strong></td>
+    <td>kwh/wh</td>
+  </tr>
+  <tr>
+    <td>-1</td>
+    <td>No meter data available</td>
+    <td>N/A</td>
+  </tr>
+</table>
+
+<h2>5. Key Code Files</h2>
+
+<table>
+  <tr>
+    <th>File</th>
+    <th>Location</th>
+    <th>Purpose</th>
+  </tr>
+  <tr>
+    <td><code>gulf_daily.json</code></td>
+    <td>Prod/loadresearch/sqls/</td>
+    <td>SQL queries for FPLNW interval data fetch</td>
+  </tr>
+  <tr>
+    <td><code>fpl_daily.json</code></td>
+    <td>Prod/loadresearch/sqls/</td>
+    <td>SQL queries for FPL interval data fetch</td>
+  </tr>
+  <tr>
+    <td><code>validations.py</code></td>
+    <td>data/</td>
+    <td>Validation logic (INCOMPINTVS, DIFFBILLCOMP, etc.)</td>
+  </tr>
+  <tr>
+    <td><code>interpolation.py</code></td>
+    <td>data/</td>
+    <td>Missing interval interpolation</td>
+  </tr>
+  <tr>
+    <td><code>load_research_data_fetch_dag.py</code></td>
+    <td>Prod/airflow-MWAA/</td>
+    <td>Airflow DAG for daily fetch</td>
+  </tr>
+  <tr>
+    <td><code>load_research_validations_dag.py</code></td>
+    <td>Prod/airflow-MWAA/</td>
+    <td>Airflow DAG for validations</td>
+  </tr>
+</table>
+
+<h2>6. Daily Process Schedule</h2>
+
+<div class="note">
+  <ul>
+    <li><strong>Daily Fetch:</strong> 18:30 UTC (1:30 PM EST / 2:30 PM EDT)</li>
+    <li><strong>Backdated/Reprocess:</strong> 13:00 UTC (8:00 AM EST / 9:00 AM EDT)</li>
+    <li><strong>Data Window:</strong> Fetches data for bills from 8 days prior to current date</li>
+  </ul>
+</div>
+
+<h2>7. Troubleshooting Checklist</h2>
+
+<div class="success">
+  <h3>If Interval Data is Missing:</h3>
+  <ol>
+    <li><strong>Check fetch_results:</strong> Does the record exist with kwh > 0?</li>
+    <li><strong>Check error table:</strong> Are there validation errors (INCOMPINTVS, DIFFBILLCOMP)?</li>
+    <li><strong>Check source data:</strong> Does raw data exist in Greenplum tables?</li>
+    <li><strong>Check meter config:</strong> Is the meter/charge_box properly configured with correct date bounds?</li>
+    <li><strong>Check ETL logs:</strong> Did the daily process complete successfully?</li>
+  </ol>
+</div>
+
+<hr>
+
+<h2>Summary</h2>
+
+<table>
+  <tr>
+    <th>Question</th>
+    <th>Answer</th>
+  </tr>
+  <tr>
+    <td><strong>How is interval data generated?</strong></td>
+    <td>Airflow DAG runs daily, executes SQL queries from gulf_daily.json against Greenplum/SAP HANA, processes through interpolation and validation, writes to ALR PostgreSQL</td>
+  </tr>
+  <tr>
+    <td><strong>Where to check interval data?</strong></td>
+    <td><strong>Primary:</strong> clr.fetch_results (meter level), clr.premise_usage (premise level)<br>
+        <strong>Errors:</strong> clr.error<br>
+        <strong>Source:</strong> Greenplum ev_read_hist, utl.v_meter_duration_read_fact_nw_2yc</td>
+  </tr>
+  <tr>
+    <td><strong>EV-specific source?</strong></td>
+    <td>billing_fpl_fplnw_consolidated.ev_read_hist joined with ev_site and ev_charge_box</td>
+  </tr>
+</table>
+
+</body>
+</html>
