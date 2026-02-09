@@ -1,0 +1,208 @@
+ip-10-196-126-69.ec2.internal
+*** Reading remote log from Cloudwatch log_group: airflow-aws-2mpv-general-airflow-Task log_stream: dag_id=load_research_reprocess/run_id=scheduled__2026-02-07T23_30_00+00_00/task_id=process_load_research/attempt=1.log.
+[2026-02-08 23:40:49,418] Dependencies all met for dep_context=non-requeueable deps ti=<TaskInstance: load_research_reprocess.process_load_research scheduled__2026-02-07T23:30:00+00:00 [queued]>
+[2026-02-08 23:40:49,435] Dependencies all met for dep_context=requeueable deps ti=<TaskInstance: load_research_reprocess.process_load_research scheduled__2026-02-07T23:30:00+00:00 [queued]>
+[2026-02-08 23:40:49,435] Starting attempt 1 of 1
+[2026-02-08 23:40:49,460] Executing <Task(PythonOperator): process_load_research> on 2026-02-07 23:30:00+00:00
+[2026-02-08 23:40:49,464] Started process 2727 to run task
+[2026-02-08 23:40:49,467] Running: ['airflow', 'tasks', 'run', 'load_research_reprocess', 'process_load_research', 'scheduled__2026-02-07T23:30:00+00:00', '--job-id', '146486', '--raw', '--subdir', 'DAGS_FOLDER/load_research_reprocess_dag.py', '--cfg-path', '/tmp/tmp9yssim9_']
+[2026-02-08 23:40:49,468] Job 146486: Subtask process_load_research
+[2026-02-08 23:40:49,841] Exporting env vars: AIRFLOW_CTX_DAG_OWNER='airflow' AIRFLOW_CTX_DAG_ID='load_research_reprocess' AIRFLOW_CTX_TASK_ID='process_load_research' AIRFLOW_CTX_EXECUTION_DATE='2026-02-07T23:30:00+00:00' AIRFLOW_CTX_TRY_NUMBER='1' AIRFLOW_CTX_DAG_RUN_ID='scheduled__2026-02-07T23:30:00+00:00'
+[2026-02-08 23:40:50,248] ip-10-196-126-158.ec2.internal
+[2026-02-08 23:40:50,248] Process ID: R
+[2026-02-08 23:40:50,249] Value of 20260208 for key=p_start_date
+[2026-02-08 23:40:50,249] sql : select distinct rltv_mo from clr.study_to_reprocess where validation_run_date is null order by rltv_mo 
+[2026-02-08, 23:40:50 UTC] {"enviroment": "PROD", "emr_conf": {"EmrManagedSlaveSecurityGroup": "sg-0cd3e192d318ce5d9", "EmrManagedMasterSecurityGroup": "sg-0cd3e192d318ce5d9", "ServiceAccessSecurityGroup": "sg-0b12245cc2333ae11", "Ec2SubnetId": "subnet-051df980cb06e22b9", "JobFlowRole": "2mpv_lo174_emr_ec2_default_role", "ServiceRole": "2mpv_lo174_emr_default_role", "AutoScalingRole": "2mpv_lo174_emr_autoscaling_role", "log_bucket": "2mpv-lo174-configurations-logs-s3", "ScriptBootstrapAction": {"Path": "s3://2mpv-lo174-configurations-logs-s3/package/EMR-Bootstrap-Script_lo174_6.sh"}, "HadoopJarStep": {"Jar": "s3://2mpv-lo174-configurations-logs-s3/script-runner/script-runner.jar", "Args": ["s3://2mpv-lo174-configurations-logs-s3/package/install_drivers_6.sh"]}, "release_label": "emr-6.3.0", "master_instance_type": "r5.12xlarge", "core_node_instance_type": "r5.12xlarge", "num_core_nodes": 5, "spark_cores": "15", "spark_memory": "115g", "spark_memoryOverhead": "16g", "spark_instances": "14", "spark_parallelism": "420", "VolumesPerInstance": 4, "SizeInGB": 256}, "Contact": "agnes.coria@fpl.com", "AppCode": "LO174", "cluster_name": "2MPV-LO174-LR-DATA-BACKDATE-EMR", "aws_sns_Topic": "arn:aws:sns:us-east-1:535307787006:2mpv-lo174-sns-topic", "log_bucket_name": "2mpv-lo174-configurations-logs-s3", "input_bucket_name": "2mpv-lo174-alr-s3", "code_bucket_name": "2mpv-lo174-configurations-logs-s3", "sm_name": "2MPV-LO174-ALR-sm", "error_log_group": "2mpv-lo174-fpl-lr-logs", "s3sftp": "2epv-lo174-cs-data-input-s3"}
+[2026-02-08 23:40:50,451] Failed to emit log record
+[2026-02-08 23:40:50,452] Traceback (most recent call last):
+[2026-02-08 23:40:50,452]   File "/usr/local/airflow/config/cloudwatch_logging.py", line 162, in emit
+    self.sniff_errors(record)
+[2026-02-08 23:40:50,452]   File "/usr/local/airflow/config/cloudwatch_logging.py", line 213, in sniff_errors
+    if pattern.search(record.message):
+                      ^^^^^^^^^^^^^^
+[2026-02-08 23:40:50,452] AttributeError: 'LogRecord' object has no attribute 'message'
+[2026-02-08 23:40:50,452] 2MPV-LO174-ALR-sm
+[2026-02-08 23:40:50,598] host : aws-fpv-lo174-clrp-cluster-0a76fdf35965-rds.cluster-cgqep0gwcrlg.us-east-1.rds.amazonaws.com 
+[2026-02-08 23:40:50,659] [202505]
+[2026-02-08, 23:40:50 UTC] {"enviroment": "PROD", "emr_conf": {"EmrManagedSlaveSecurityGroup": "sg-0cd3e192d318ce5d9", "EmrManagedMasterSecurityGroup": "sg-0cd3e192d318ce5d9", "ServiceAccessSecurityGroup": "sg-0b12245cc2333ae11", "Ec2SubnetId": "subnet-051df980cb06e22b9", "JobFlowRole": "2mpv_lo174_emr_ec2_default_role", "ServiceRole": "2mpv_lo174_emr_default_role", "AutoScalingRole": "2mpv_lo174_emr_autoscaling_role", "log_bucket": "2mpv-lo174-configurations-logs-s3", "ScriptBootstrapAction": {"Path": "s3://2mpv-lo174-configurations-logs-s3/package/EMR-Bootstrap-Script_lo174_6.sh"}, "HadoopJarStep": {"Jar": "s3://2mpv-lo174-configurations-logs-s3/script-runner/script-runner.jar", "Args": ["s3://2mpv-lo174-configurations-logs-s3/package/install_drivers_6.sh"]}, "release_label": "emr-6.3.0", "master_instance_type": "r5.12xlarge", "core_node_instance_type": "r5.12xlarge", "num_core_nodes": 5, "spark_cores": "15", "spark_memory": "115g", "spark_memoryOverhead": "16g", "spark_instances": "14", "spark_parallelism": "420", "VolumesPerInstance": 4, "SizeInGB": 256}, "Contact": "agnes.coria@fpl.com", "AppCode": "LO174", "cluster_name": "2MPV-LO174-LR-DATA-BACKDATE-EMR", "aws_sns_Topic": "arn:aws:sns:us-east-1:535307787006:2mpv-lo174-sns-topic", "log_bucket_name": "2mpv-lo174-configurations-logs-s3", "input_bucket_name": "2mpv-lo174-alr-s3", "code_bucket_name": "2mpv-lo174-configurations-logs-s3", "sm_name": "2MPV-LO174-ALR-sm", "error_log_group": "2mpv-lo174-fpl-lr-logs", "s3sftp": "2epv-lo174-cs-data-input-s3"}
+[2026-02-08 23:40:50,766] Value of rltv_mo = 202505 
+[2026-02-08, 23:40:50 UTC] {"enviroment": "PROD", "emr_conf": {"EmrManagedSlaveSecurityGroup": "sg-0cd3e192d318ce5d9", "EmrManagedMasterSecurityGroup": "sg-0cd3e192d318ce5d9", "ServiceAccessSecurityGroup": "sg-0b12245cc2333ae11", "Ec2SubnetId": "subnet-051df980cb06e22b9", "JobFlowRole": "2mpv_lo174_emr_ec2_default_role", "ServiceRole": "2mpv_lo174_emr_default_role", "AutoScalingRole": "2mpv_lo174_emr_autoscaling_role", "log_bucket": "2mpv-lo174-configurations-logs-s3", "ScriptBootstrapAction": {"Path": "s3://2mpv-lo174-configurations-logs-s3/package/EMR-Bootstrap-Script_lo174_6.sh"}, "HadoopJarStep": {"Jar": "s3://2mpv-lo174-configurations-logs-s3/script-runner/script-runner.jar", "Args": ["s3://2mpv-lo174-configurations-logs-s3/package/install_drivers_6.sh"]}, "release_label": "emr-6.3.0", "master_instance_type": "r5.12xlarge", "core_node_instance_type": "r5.12xlarge", "num_core_nodes": 5, "spark_cores": "15", "spark_memory": "115g", "spark_memoryOverhead": "16g", "spark_instances": "14", "spark_parallelism": "420", "VolumesPerInstance": 4, "SizeInGB": 256}, "Contact": "agnes.coria@fpl.com", "AppCode": "LO174", "cluster_name": "2MPV-LO174-LR-DATA-BACKDATE-EMR", "aws_sns_Topic": "arn:aws:sns:us-east-1:535307787006:2mpv-lo174-sns-topic", "log_bucket_name": "2mpv-lo174-configurations-logs-s3", "input_bucket_name": "2mpv-lo174-alr-s3", "code_bucket_name": "2mpv-lo174-configurations-logs-s3", "sm_name": "2MPV-LO174-ALR-sm", "error_log_group": "2mpv-lo174-fpl-lr-logs", "s3sftp": "2epv-lo174-cs-data-input-s3"}
+[2026-02-08 23:40:50,914] ['-u 2mpv-lo174-configurations-logs-s3/loadresearch/process_reprocess_loadresearch.json', '-z 200', '-j R202505scheduled__2026-02-07T23:30:00+00:00', '-m 202505', '-a reprocess', '-t arn:aws:sns:us-east-1:535307787006:2mpv-lo174-sns-topic', '-g 2mpv-lo174-fpl-lr-logs', '-d load_research_reprocess']
+[2026-02-08, 23:40:50 UTC] {"file": "local:/home/hadoop/loadresearch.py", "args": ["-u 2mpv-lo174-configurations-logs-s3/loadresearch/process_reprocess_loadresearch.json", "-z 200", "-j R202505scheduled__2026-02-07T23:30:00+00:00", "-m 202505", "-a reprocess", "-t arn:aws:sns:us-east-1:535307787006:2mpv-lo174-sns-topic", "-g 2mpv-lo174-fpl-lr-logs", "-d load_research_reprocess"], "conf": {"livy.spark.deployMode": "client", "spark.yarn.appMasterEnv.PYSPARK_PYTHON": "/usr/bin/python3", "spark.executorEnv.PYSPARK_PYTHON": "/usr/bin/python3", "livy.spark.yarn.appMasterEnv.PYSPARK_PYTHON": "/usr/bin/python3", "livy.spark.yarn.executorEnv.PYTHONHOME": "/usr/bin/python3"}}
+[2026-02-08 23:40:51,615] <Response [201]>
+[2026-02-08, 23:40:51 UTC] {"id": 0, "name": null, "owner": null, "proxyUser": null, "state": "starting", "appId": null, "appInfo": {"driverLogUrl": null, "sparkUiUrl": null}, "log": ["stdout: ", "\nstderr: ", "\nYARN Diagnostics: "]}
+[2026-02-08 23:40:51,616] Session is starting....
+[2026-02-08 23:40:51,616] Waiting 5 seconds
+[2026-02-08 23:40:56,651] latest state as 'starting'
+[2026-02-08 23:40:56,651] Waiting 5 seconds
+[2026-02-08 23:41:01,663] latest state as 'starting'
+[2026-02-08 23:41:01,663] Waiting 5 seconds
+[2026-02-08 23:41:06,673] latest state as 'running'
+[2026-02-08, 23:41:06 UTC] {"id": 0, "name": null, "owner": null, "proxyUser": null, "state": "running", "appId": "application_1770593989488_0002", "appInfo": {"driverLogUrl": "http://ip-10-196-126-145.neeaws.local:8042/node/containerlogs/container_1770593989488_0002_01_000001/livy", "sparkUiUrl": "http://ip-10-196-126-158.neeaws.local:20888/proxy/application_1770593989488_0002/"}, "log": ["26/02/08 23:41:05 INFO ServerInfo: Adding filter to /static/sql: org.apache.hadoop.yarn.server.webproxy.amfilter.AmIpFilter", "26/02/08 23:41:05 INFO ContextHandler: Started o.s.j.s.ServletContextHandler@275d04af{/static/sql,null,AVAILABLE,@Spark}", "s3a://2mpv-lo174-configurations-logs-s3/loadresearch/process_reprocess_loadresearch.json", "Process type:  reprocess", "3.7.16 (default, Dec 11 2025, 18:13:52) ", "[GCC 7.3.1 20180712 (Red Hat 7.3.1-17)]", "s3a://2mpv-lo174-configurations-logs-s3/loadresearch/", "starting", "\nstderr: ", "\nYARN Diagnostics: "]}
+[2026-02-08 23:41:06,674] session_id: '0'
+[2026-02-08 23:54:37,427] stdout: 
+[2026-02-08 23:54:37,427] Warning: Ignoring non-Spark config property: yarn.nodemanager.pmem-check-enabled
+[2026-02-08 23:54:37,427] Warning: Ignoring non-Spark config property: yarn.nodemanager.vmem-check-enabled
+[2026-02-08 23:54:37,427] Warning: Ignoring non-Spark config property: livy.spark.yarn.executorEnv.PYTHONHOME
+[2026-02-08 23:54:37,427] Warning: Ignoring non-Spark config property: livy.spark.yarn.appMasterEnv.PYSPARK_PYTHON
+[2026-02-08 23:54:37,427] Warning: Ignoring non-Spark config property: livy.spark.deployMode
+[2026-02-08 23:54:37,427] /usr/local/lib/python3.7/site-packages/pymysql/_auth.py:8: CryptographyDeprecationWarning: Python 3.7 is no longer supported by the Python core team and support for it is deprecated in cryptography. The next release of cryptography will remove support for Python 3.7.
+[2026-02-08 23:54:37,427]   from cryptography.hazmat.backends import default_backend
+[2026-02-08 23:54:37,427] /usr/local/lib/python3.7/site-packages/google/api_core/_python_version_support.py:246: FutureWarning: You are using a non-supported Python version (3.7.16). Google will not post any further updates to google.api_core supporting this Python version. Please upgrade to the latest Python version, or at least Python 3.10, and then update google.api_core.
+[2026-02-08 23:54:37,427]   warnings.warn(message, FutureWarning)
+[2026-02-08 23:54:37,427] us-east-1
+[2026-02-08 23:54:37,427] _parallelism:  200
+[2026-02-08 23:54:37,428]  2mpv-lo174-configurations-logs-s3/loadresearch/process_reprocess_loadresearch.json
+[2026-02-08 23:54:37,428] process_run_date: 20260208
+[2026-02-08 23:54:37,428] p_start_date: 20260208
+[2026-02-08 23:54:37,428] p_end_date: 20260208
+[2026-02-08 23:54:37,428] 26/02/08 23:40:56 WARN Client: Neither spark.yarn.jars nor spark.yarn.archive is set, falling back to uploading libraries under SPARK_HOME.
+[2026-02-08 23:54:37,428] 	 client token: N/A
+[2026-02-08 23:54:37,428] 	 diagnostics: AM container is launched, waiting for AM container to Register with RM
+[2026-02-08 23:54:37,428] 	 ApplicationMaster host: N/A
+[2026-02-08 23:54:37,428] 	 ApplicationMaster RPC port: -1
+[2026-02-08 23:54:37,428] 	 queue: default
+[2026-02-08 23:54:37,428] 	 start time: 1770594059725
+[2026-02-08 23:54:37,428] 	 final status: UNDEFINED
+[2026-02-08 23:54:37,428] 	 tracking URL: http://ip-10-196-126-158.neeaws.local:20888/proxy/application_1770593989488_0002/
+[2026-02-08 23:54:37,428] 	 user: livy
+[2026-02-08 23:54:37,428] 	 diagnostics: N/A
+[2026-02-08 23:54:37,428] 	 ApplicationMaster host: 10.196.126.145
+[2026-02-08 23:54:37,428] s3a://2mpv-lo174-configurations-logs-s3/loadresearch/process_reprocess_loadresearch.json
+[2026-02-08 23:54:37,428] Process type:  reprocess
+[2026-02-08 23:54:37,429] 3.7.16 (default, Dec 11 2025, 18:13:52) 
+[2026-02-08 23:54:37,429] [GCC 7.3.1 20180712 (Red Hat 7.3.1-17)]
+[2026-02-08 23:54:37,429] s3a://2mpv-lo174-configurations-logs-s3/loadresearch/
+[2026-02-08 23:54:37,429] starting
+[2026-02-08 23:54:37,429] 
+stderr: 
+[2026-02-08 23:54:37,429] 
+YARN Diagnostics: 
+[2026-02-08 23:54:37,429] end
+[2026-02-08 23:54:37,429] [Row(connection_name='2MPV-LO174-ALR-sm', process_name='loadresearch', process_steps=[Row(company='FPL', process_order=1, sources=['fpl_reprocess.json'], target=[Row(extraction_query="select 'FPL' as company, * from fpl_alr", target_database=[Row(destination='alr_s3', mode='append', new_columns=[], outputtype='s3_file', partition_key='rltv_greg_mo', post_action='', pre_action='', primary_key='null', schema='alr_metrics.json', table_name='alr_reprocess')]), Row(extraction_query="select 'FPL' as company, * from fpl_lse", target_database=[Row(destination='alr_s3', mode='append', new_columns=[], outputtype='s3_file', partition_key='rltv_greg_mo', post_action='', pre_action='', primary_key='null', schema='lse_metrics.json', table_name='lse_reprocess')])]), Row(company='FPLNW', process_order=2, sources=['gulf_reprocess.json'], target=[Row(extraction_query="select 'FPLNW' as company, * from fpl_alr", target_database=[Row(destination='alr_s3', mode='append', new_columns=[], outputtype='s3_file', partition_key='rltv_greg_mo', post_action='', pre_action='', primary_key='null', schema='alr_metrics.json', table_name='alr_reprocess')]), Row(extraction_query="select 'FPLNW' as company, * from fpl_lse", target_database=[Row(destination='alr_s3', mode='append', new_columns=[], outputtype='s3_file', partition_key='rltv_greg_mo', post_action='', pre_action='', primary_key='null', schema='lse_metrics.json', table_name='lse_reprocess')])])])]
+[2026-02-08 23:54:37,429] [Row(company='FPL', process_order=1, sources=['fpl_reprocess.json'], target=[Row(extraction_query="select 'FPL' as company, * from fpl_alr", target_database=[Row(destination='alr_s3', mode='append', new_columns=[], outputtype='s3_file', partition_key='rltv_greg_mo', post_action='', pre_action='', primary_key='null', schema='alr_metrics.json', table_name='alr_reprocess')]), Row(extraction_query="select 'FPL' as company, * from fpl_lse", target_database=[Row(destination='alr_s3', mode='append', new_columns=[], outputtype='s3_file', partition_key='rltv_greg_mo', post_action='', pre_action='', primary_key='null', schema='lse_metrics.json', table_name='lse_reprocess')])]), Row(company='FPLNW', process_order=2, sources=['gulf_reprocess.json'], target=[Row(extraction_query="select 'FPLNW' as company, * from fpl_alr", target_database=[Row(destination='alr_s3', mode='append', new_columns=[], outputtype='s3_file', partition_key='rltv_greg_mo', post_action='', pre_action='', primary_key='null', schema='alr_metrics.json', table_name='alr_reprocess')]), Row(extraction_query="select 'FPLNW' as company, * from fpl_lse", target_database=[Row(destination='alr_s3', mode='append', new_columns=[], outputtype='s3_file', partition_key='rltv_greg_mo', post_action='', pre_action='', primary_key='null', schema='lse_metrics.json', table_name='lse_reprocess')])])]
+[2026-02-08 23:54:37,429] 2026-02-08-23:41:14
+[2026-02-08 23:54:37,429] 2026-02-08 00:00:00
+[2026-02-08 23:54:37,429] fpl_reprocess.json
+[2026-02-08 23:54:37,429] study
+[2026-02-08 23:54:37,429] study_premise
+[2026-02-08 23:54:37,429] variable
+[2026-02-08 23:54:37,429] 26/02/08 23:41:29 ERROR AsyncEventQueue: Listener EventLoggingListener threw an exception
+[2026-02-08 23:54:37,430] java.util.ConcurrentModificationException
+[2026-02-08 23:54:37,430] 	at java.util.Hashtable$Enumerator.next(Hashtable.java:1408)
+[2026-02-08 23:54:37,430] 	at scala.collection.convert.Wrappers$JPropertiesWrapper$$anon$6.next(Wrappers.scala:424)
+[2026-02-08 23:54:37,430] 	at scala.collection.convert.Wrappers$JPropertiesWrapper$$anon$6.next(Wrappers.scala:420)
+[2026-02-08 23:54:37,430] 	at scala.collection.Iterator.foreach(Iterator.scala:941)
+[2026-02-08 23:54:37,430] 	at scala.collection.Iterator.foreach$(Iterator.scala:941)
+[2026-02-08 23:54:37,430] 	at scala.collection.AbstractIterator.foreach(Iterator.scala:1429)
+[2026-02-08 23:54:37,430] 	at scala.collection.IterableLike.foreach(IterableLike.scala:74)
+[2026-02-08 23:54:37,430] 	at scala.collection.IterableLike.foreach$(IterableLike.scala:73)
+[2026-02-08 23:54:37,430] 	at scala.collection.AbstractIterable.foreach(Iterable.scala:56)
+[2026-02-08 23:54:37,430] 	at scala.collection.mutable.MapLike.toSeq(MapLike.scala:75)
+[2026-02-08 23:54:37,430] 	at scala.collection.mutable.MapLike.toSeq$(MapLike.scala:72)
+[2026-02-08 23:54:37,430] 	at scala.collection.mutable.AbstractMap.toSeq(Map.scala:82)
+[2026-02-08 23:54:37,430] 	at org.apache.spark.scheduler.EventLoggingListener.redactProperties(EventLoggingListener.scala:290)
+[2026-02-08 23:54:37,430] 	at org.apache.spark.scheduler.EventLoggingListener.onJobStart(EventLoggingListener.scala:162)
+[2026-02-08 23:54:37,430] 	at org.apache.spark.scheduler.SparkListenerBus.doPostEvent(SparkListenerBus.scala:37)
+[2026-02-08 23:54:37,430] 	at org.apache.spark.scheduler.SparkListenerBus.doPostEvent$(SparkListenerBus.scala:28)
+[2026-02-08 23:54:37,430] 	at org.apache.spark.scheduler.AsyncEventQueue.doPostEvent(AsyncEventQueue.scala:37)
+[2026-02-08 23:54:37,431] 	at org.apache.spark.util.ListenerBus.postToAll(ListenerBus.scala:117)
+[2026-02-08 23:54:37,431] 	at org.apache.spark.util.ListenerBus.postToAll$(ListenerBus.scala:101)
+[2026-02-08 23:54:37,431] 	at org.apache.spark.scheduler.AsyncEventQueue.super$postToAll(AsyncEventQueue.scala:105)
+[2026-02-08 23:54:37,431] 	at org.apache.spark.scheduler.AsyncEventQueue.$anonfun$dispatch$1(AsyncEventQueue.scala:105)
+[2026-02-08 23:54:37,431] 	at scala.runtime.java8.JFunction0$mcJ$sp.apply(JFunction0$mcJ$sp.java:23)
+[2026-02-08 23:54:37,431] 	at scala.util.DynamicVariable.withValue(DynamicVariable.scala:62)
+[2026-02-08 23:54:37,431] 	at org.apache.spark.scheduler.AsyncEventQueue.org$apache$spark$scheduler$AsyncEventQueue$$dispatch(AsyncEventQueue.scala:100)
+[2026-02-08 23:54:37,431] 	at org.apache.spark.scheduler.AsyncEventQueue$$anon$2.$anonfun$run$1(AsyncEventQueue.scala:96)
+[2026-02-08 23:54:37,431] 	at org.apache.spark.util.Utils$.tryOrStopSparkContext(Utils.scala:1381)
+[2026-02-08 23:54:37,431] 	at org.apache.spark.scheduler.AsyncEventQueue$$anon$2.run(AsyncEventQueue.scala:96)
+[2026-02-08 23:54:37,431] 26/02/08 23:41:30 ERROR AsyncEventQueue: Listener EventLoggingListener threw an exception
+[2026-02-08 23:54:37,431] meters
+[2026-02-08 23:54:37,431] pb_accounts
+[2026-02-08 23:54:37,431] uevmada
+[2026-02-08 23:54:37,431] uevcust
+[2026-02-08 23:54:37,431] mada
+[2026-02-08 23:54:37,431] 10
+[2026-02-08 23:54:37,431] meters_pb
+[2026-02-08 23:54:37,431] Cleared 128 existing files from s3://2mpv-lo174-alr-s3/reprocess_unload/filename_
+[2026-02-08 23:54:37,432] 2026-02-08 23:46:51
+[2026-02-08 23:54:37,432] Error=>syntax error at or near ")" in context "ami_dvc_name in ()", at line 1
+[2026-02-08 23:54:37,432] LINE 1: ...hnl_flag is null and mrdg is not null and (ami_dvc_name in (...
+[2026-02-08 23:54:37,432]                                                              ^
+[2026-02-08 23:54:37,436] /usr/local/airflow/.local/lib/python3.11/site-packages/watchtower/__init__.py:349 WatchtowerWarning: Received empty message. Empty messages cannot be sent to CloudWatch Logs
+[2026-02-08 23:54:37,436] Failed to emit log record
+[2026-02-08 23:54:37,437] Traceback (most recent call last):
+[2026-02-08 23:54:37,437]   File "/usr/local/airflow/config/cloudwatch_logging.py", line 162, in emit
+    self.sniff_errors(record)
+[2026-02-08 23:54:37,437]   File "/usr/local/airflow/config/cloudwatch_logging.py", line 213, in sniff_errors
+    if pattern.search(record.message):
+                      ^^^^^^^^^^^^^^
+[2026-02-08 23:54:37,437] AttributeError: 'LogRecord' object has no attribute 'message'
+[2026-02-08 23:54:37,437] UNLOAD completed to: s3://2mpv-lo174-alr-s3/reprocess_unload/filename_
+[2026-02-08 23:54:37,437] UNLOAD/Read operation failed for mass_market_nm: Path does not exist: s3://2mpv-lo174-alr-s3/reprocess_unload/filename_*.gz
+[2026-02-08 23:54:37,437] 2026-02-08 23:46:52
+[2026-02-08 23:54:37,437] Restored timeParserPolicy to: EXCEPTION
+[2026-02-08 23:54:37,437] No data returned from UNLOAD for mass_market_not_nm - DataFrame is empty (0 rows)
+[2026-02-08 23:54:37,438] 2026-02-08 23:47:55
+[2026-02-08 23:54:37,438] power_billing
+[2026-02-08 23:54:37,438] 0
+[2026-02-08 23:54:37,438] Empty DataFrame
+[2026-02-08 23:54:37,438] Columns: [premiseid, accountid, channel, read_strt_time, meterid, count]
+[2026-02-08 23:54:37,438] Index: []
+[2026-02-08 23:54:37,438] Duplicates values: 0
+[2026-02-08 23:54:37,438] 2026-02-08-23:51:50
+[2026-02-08 23:54:37,438] Row(extraction_query="select 'FPL' as company, * from fpl_alr", target_database=[Row(destination='alr_s3', mode='append', new_columns=[], outputtype='s3_file', partition_key='rltv_greg_mo', post_action='', pre_action='', primary_key='null', schema='alr_metrics.json', table_name='alr_reprocess')])
+[2026-02-08 23:54:37,438] Row(destination='alr_s3', mode='append', new_columns=[], outputtype='s3_file', partition_key='rltv_greg_mo', post_action='', pre_action='', primary_key='null', schema='alr_metrics.json', table_name='alr_reprocess')
+[2026-02-08 23:54:37,438] ['company', 'premiseid', 'rltv_mo', 'meterid', 'channel', 'customer', 'account_status', 'accountid', 'metertype', 'metermtpl', 'meterstart_dt', 'meterstop_dt', 'netmeter', 'goodintvcount', 'badintvcount', 'interpolated', 'spi_check', 'kwh', 'ratecode', 'zipcode', 'streetaddress', 'wc_dist', 'billstart', 'billstop', 'bill_date', 'billkwh', 'avgmonthlykwh', 'num_months_monthlyavg', 'spi']
+[2026-02-08 23:54:37,438] r_audit
+[2026-02-08 23:54:37,438] [{'audit_id': 'R202505scheduled__2026-02-07T23:30:00+00:00', 'etl_process_detail_id': 'loadresearch', 'etl_process_run_date': '20260208', 'etl_process_start_dt': datetime.datetime(2026, 2, 8, 23, 41, 6), 'etl_process_end_dt': datetime.datetime(2026, 2, 8, 23, 52, 6), 'etl_process_status': 'success', 'etl_process_rows': 34, 'etl_process_id': 1, 'target_name': 'alr_s3', 'step': 'target-write'}]
+[2026-02-08 23:54:37,438] Row(extraction_query="select 'FPL' as company, * from fpl_lse", target_database=[Row(destination='alr_s3', mode='append', new_columns=[], outputtype='s3_file', partition_key='rltv_greg_mo', post_action='', pre_action='', primary_key='null', schema='lse_metrics.json', table_name='lse_reprocess')])
+[2026-02-08 23:54:37,438] Row(destination='alr_s3', mode='append', new_columns=[], outputtype='s3_file', partition_key='rltv_greg_mo', post_action='', pre_action='', primary_key='null', schema='lse_metrics.json', table_name='lse_reprocess')
+[2026-02-08 23:54:37,438] 26/02/08 23:52:09 ERROR AsyncEventQueue: Listener EventLoggingListener threw an exception
+[2026-02-08 23:54:37,438] 26/02/08 23:52:10 ERROR AsyncEventQueue: Listener EventLoggingListener threw an exception
+[2026-02-08 23:54:37,438] ['company', 'premiseid', 'accountid', 'metertype', 'metermtply', 'read_strt_time', 'kwh', 'meterid', 'channel', 'uom', 'spi', 'status', 'customer', 'ratecode', 'zipcode', 'billkwh', 'wc_dist']
+[2026-02-08 23:54:37,438] [{'audit_id': 'R202505scheduled__2026-02-07T23:30:00+00:00', 'etl_process_detail_id': 'loadresearch', 'etl_process_run_date': '20260208', 'etl_process_start_dt': datetime.datetime(2026, 2, 8, 23, 41, 6), 'etl_process_end_dt': datetime.datetime(2026, 2, 8, 23, 52, 6), 'etl_process_status': 'success', 'etl_process_rows': 34, 'etl_process_id': 1, 'target_name': 'alr_s3', 'step': 'target-write'}, {'audit_id': 'R202505scheduled__2026-02-07T23:30:00+00:00', 'etl_process_detail_id': 'loadresearch', 'etl_process_run_date': '20260208', 'etl_process_start_dt': datetime.datetime(2026, 2, 8, 23, 41, 6), 'etl_process_end_dt': datetime.datetime(2026, 2, 8, 23, 52, 15), 'etl_process_status': 'success', 'etl_process_rows': 99456, 'etl_process_id': 1, 'target_name': 'alr_s3', 'step': 'target-write'}]
+[2026-02-08 23:54:37,439] gulf_reprocess.json
+[2026-02-08 23:54:37,439] 5
+[2026-02-08 23:54:37,439] +---------+-------+---------+---------+--------+-------+-------------+---------------------+--------+-------+--------+--------------+-------+---------+-------------+--------+--------+-------+-----+--------+-----+-----+
+[2026-02-08 23:54:37,439] |premiseid|rltv_mo|accountid|billstart|billstop|billkwh|avgmonthlykwh|num_months_monthlyavg|ratecode|wc_dist|customer|account_status|zipcode|bill_date|streetaddress|netmeter|netstart|netstop|evkwh|num_rows|dupl1|dupl2|
+[2026-02-08 23:54:37,439] 26/02/08 23:53:25 ERROR AsyncEventQueue: Listener EventLoggingListener threw an exception
+[2026-02-08 23:54:37,439] power_billing_gulf
+[2026-02-08 23:54:37,439] mass_market_gulf
+[2026-02-08 23:54:37,439] Error description: local variable 'nw_uev_lse' referenced before assignment
+[2026-02-08 23:54:37,439] Hi,
+[2026-02-08 23:54:37,439] Below is the Failure details :
+[2026-02-08 23:54:37,439]   Failure Summary : 
+[2026-02-08 23:54:37,439]  -----------------------------------------------
+[2026-02-08 23:54:37,439]  Error: local variable 'nw_uev_lse' referenced before assignment
+[2026-02-08 23:54:37,439] response SNS: {'MessageId': '213c13fd-4acd-5bc8-96d0-71fe6eba040b', 'ResponseMetadata': {'RequestId': 'bf79340a-930f-5c3a-af77-5609b778d3f9', 'HTTPStatusCode': 200, 'HTTPHeaders': {'x-amzn-requestid': 'bf79340a-930f-5c3a-af77-5609b778d3f9', 'date': 'Sun, 08 Feb 2026 23:54:31 GMT', 'content-type': 'text/xml', 'content-length': '294', 'connection': 'keep-alive'}, 'RetryAttempts': 0}}
+[2026-02-08 23:54:37,439]  Concurrent marking:
+[2026-02-08 23:54:37,439]       0   init marks: total time =     0.00 s (avg =     0.00 ms).
+[2026-02-08 23:54:37,439]      20      remarks: total time =     0.50 s (avg =    25.03 ms).
+[2026-02-08 23:54:37,439]            [std. dev =     8.88 ms, max =    34.84 ms]
+[2026-02-08 23:54:37,439]         20  final marks: total time =     0.03 s (avg =     1.33 ms).
+[2026-02-08 23:54:37,440]               [std. dev =     0.82 ms, max =     4.38 ms]
+[2026-02-08 23:54:37,440]         20    weak refs: total time =     0.47 s (avg =    23.71 ms).
+[2026-02-08 23:54:37,440]               [std. dev =     8.70 ms, max =    33.06 ms]
+[2026-02-08 23:54:37,440]      20     cleanups: total time =     0.04 s (avg =     1.94 ms).
+[2026-02-08 23:54:37,440]            [std. dev =     0.23 ms, max =     2.71 ms]
+[2026-02-08 23:54:37,440]     Final counting total time =     0.01 s (avg =     0.53 ms).
+[2026-02-08 23:54:37,440]     RS scrub total time =     0.01 s (avg =     0.45 ms).
+[2026-02-08 23:54:37,440]   Total stop_world time =     0.54 s.
+[2026-02-08 23:54:37,440]   Total concurrent time =     6.26 s (    3.19 s marking).
+[2026-02-08 23:54:37,440] session_state :success
+[2026-02-08 23:54:37,440] --------------------------------------------------End of full log for batch 0--------------------------------------------------
+[2026-02-08 23:54:37,440] success
+[2026-02-08 23:54:37,440] 4
+[2026-02-08 23:54:37,440] Audit_Id: R202505scheduled__2026-02-07T23:30:00+00:00
+[2026-02-08 23:54:37,440] Process ID: loadresearch
+[2026-02-08 23:54:37,537] database : clrp
+[2026-02-08 23:54:37,592] <connection object at 0x7fd8074de5c0; dsn: 'user=clr_app_user password=xxx dbname=clrp host=aws-fpv-lo174-clrp-cluster-0a76fdf35965-rds.cluster-cgqep0gwcrlg.us-east-1.rds.amazonaws.com port=5605', closed: 0>
+[2026-02-08 23:54:37,592] SELECT etl_process_status, target_name, step, etl_process_rows, etl_process_id, etl_process_run_date, audit_id, etl_process_detail_id FROM clr.css_audit where audit_id = 'R202505scheduled__2026-02-07T23:30:00+00:00' and etl_process_detail_id = 'loadresearch'
+[2026-02-08 23:54:37,610] SNS
+[2026-02-08, 23:54:37 UTC] {"enviroment": "PROD", "emr_conf": {"EmrManagedSlaveSecurityGroup": "sg-0cd3e192d318ce5d9", "EmrManagedMasterSecurityGroup": "sg-0cd3e192d318ce5d9", "ServiceAccessSecurityGroup": "sg-0b12245cc2333ae11", "Ec2SubnetId": "subnet-051df980cb06e22b9", "JobFlowRole": "2mpv_lo174_emr_ec2_default_role", "ServiceRole": "2mpv_lo174_emr_default_role", "AutoScalingRole": "2mpv_lo174_emr_autoscaling_role", "log_bucket": "2mpv-lo174-configurations-logs-s3", "ScriptBootstrapAction": {"Path": "s3://2mpv-lo174-configurations-logs-s3/package/EMR-Bootstrap-Script_lo174_6.sh"}, "HadoopJarStep": {"Jar": "s3://2mpv-lo174-configurations-logs-s3/script-runner/script-runner.jar", "Args": ["s3://2mpv-lo174-configurations-logs-s3/package/install_drivers_6.sh"]}, "release_label": "emr-6.3.0", "master_instance_type": "r5.12xlarge", "core_node_instance_type": "r5.12xlarge", "num_core_nodes": 5, "spark_cores": "15", "spark_memory": "115g", "spark_memoryOverhead": "16g", "spark_instances": "14", "spark_parallelism": "420", "VolumesPerInstance": 4, "SizeInGB": 256}, "Contact": "agnes.coria@fpl.com", "AppCode": "LO174", "cluster_name": "2MPV-LO174-LR-DATA-BACKDATE-EMR", "aws_sns_Topic": "arn:aws:sns:us-east-1:535307787006:2mpv-lo174-sns-topic", "log_bucket_name": "2mpv-lo174-configurations-logs-s3", "input_bucket_name": "2mpv-lo174-alr-s3", "code_bucket_name": "2mpv-lo174-configurations-logs-s3", "sm_name": "2MPV-LO174-ALR-sm", "error_log_group": "2mpv-lo174-fpl-lr-logs", "s3sftp": "2epv-lo174-cs-data-input-s3"}
+[2026-02-08 23:54:37,768] response SNS: {'MessageId': 'a71679cb-250b-5ddb-be52-1bc801766101', 'ResponseMetadata': {'RequestId': '9055f01b-ee7d-5897-870c-9218ca00944d', 'HTTPStatusCode': 200, 'HTTPHeaders': {'x-amzn-requestid': '9055f01b-ee7d-5897-870c-9218ca00944d', 'date': 'Sun, 08 Feb 2026 23:54:37 GMT', 'content-type': 'text/xml', 'content-length': '294', 'connection': 'keep-alive'}, 'RetryAttempts': 0}}
+[2026-02-08 23:54:37,879] Done. Returned value was: True
+[2026-02-08 23:54:37,940] Marking task as SUCCESS. dag_id=load_research_reprocess, task_id=process_load_research, execution_date=20260207T233000, start_date=20260208T234049, end_date=20260208T235437
+[2026-02-08 23:54:38,054] Task exited with return code 0
+[2026-02-08 23:54:38,095] 1 downstream tasks scheduled from follow-on schedule check
