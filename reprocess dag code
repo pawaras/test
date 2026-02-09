@@ -1,0 +1,524 @@
+import os
+
+from airflow import DAG
+from airflow.operators.python_operator import PythonOperator,BranchPythonOperator
+from airflow.operators.bash_operator import BashOperator
+from airflow.operators.trigger_dagrun import TriggerDagRunOperator
+from datetime import datetime, timedelta
+import time
+from dateutil.relativedelta import relativedelta
+from airflow.utils.dates import days_ago
+from airflow.models.param import Param
+from airflowUtils.conf import *
+
+import json
+import boto3
+from datetime import datetime
+import logging
+from botocore.client import Config
+import sys
+import airflowUtils.emr_utils as emr
+import psycopg2
+import re
+from botocore.exceptions import ClientError
+
+logger = logging.getLogger("airflow.task")
+# logger.setLevel(logging.INFO)
+
+
+default_args = {
+    'owner': 'airflow',
+    'start_date': days_ago(1),
+    'depends_on_past': False,
+    # 'email': ['airflow@example.com'],
+    'email_on_failure': False,
+    'email_on_retry': False,
+    'retry_delay': timedelta(minutes=5),
+    'provide_context': True
+}
+
+# Initialize the DAG
+dag = DAG('load_research_reprocess', catchup=False, concurrency=3, schedule_interval='30 23 * * *', default_args=default_args)
+
+config = Config(connect_timeout=30, read_timeout=30, proxies={'https': 'http://EVAPzen.fpl.com:10262'})
+Subject='ALR - Airflow - Task Error'
+
+
+dag_name = 'load_research_reprocess'
+
+running_date = str((datetime.now()).strftime('%Y%m%d'))
+audit_running = str((datetime.now()).strftime('%Y%m%d-%H:%M:%S.%f')[:-3])
+
+region = emr.get_region()
+emr.client(region_name=region, config=config)
+
+
+def read_config():
+    _configuration = emr.get_config(AIRFLOW_S3_BUCKET, 'dags/alr_configuration/load_research_backdate.json')
+    Contact = _configuration['Contact']
+    AppCode = _configuration['AppCode']
+    cluster_name = _configuration['cluster_name']
+    log_bucket = _configuration['log_bucket_name']
+    Topic = _configuration['aws_sns_Topic']
+    input_bucket_name = _configuration['input_bucket_name']
+    sm_name = _configuration['sm_name']
+    error_log_group = _configuration['error_log_group']
+    s3sftp = _configuration['s3sftp']
+
+    running_date = str((datetime.now()).strftime('%Y%m%d'))
+    audit_running = str((datetime.now()).strftime('%Y%m%d-%H:%M:%S.%f')[:-3])
+    emr_conf = _configuration['emr_conf']
+
+    return {
+        'Contact': Contact,
+        'AppCode': AppCode,
+        'cluster_name': cluster_name,
+        'log_bucket': log_bucket,
+        'Topic': Topic,
+        'sm_name': sm_name,
+        'error_log_group': error_log_group,
+        'running_date': running_date,
+        'audit_running': audit_running,
+        'emr_conf': emr_conf,
+        'input_bucket_name':input_bucket_name,
+        'code_bucket_name': _configuration['code_bucket_name'],
+        's3sftp': s3sftp
+    }
+
+# Creates an EMR cluster
+def create_emr(**kwargs):
+    dag_config = read_config()
+    cluster_name = dag_config['cluster_name']
+    emr_conf = dag_config['emr_conf']
+    Contact = dag_config['Contact']
+    AppCode = dag_config['AppCode']
+    print(region)
+    print(cluster_name)
+    cluster_id = emr.check_emr_cluster(cluster_name)
+    if cluster_id != None:
+        logger.info('Cluster already exists')
+    else:
+        cluster_id = emr.create_emr_cluster(emr_conf, region_name=region, cluster_name=cluster_name, AppCode=AppCode,
+                                            Contact=Contact)
+        logger.info(cluster_id)
+        if cluster_id != None:
+            emr.wait_for_cluster_creation(cluster_id)
+
+    return cluster_id
+
+
+
+# Terminates the EMR cluster
+def terminate_emr(**kwargs):
+    ti = kwargs['ti']
+    cluster_id = ti.xcom_pull(task_ids='create_cluster')
+    logger.info(cluster_id)
+    emr.terminate_cluster(cluster_id)
+
+
+def send_sns(Topic, Message, Subject= 'Error'):
+    logger.info('SNS')
+    response = None
+    dag_config = read_config()
+    error_log_group = dag_config['error_log_group']
+    try:
+        sns = boto3.client('sns', region_name=region)
+        response = sns.publish(
+            TopicArn=Topic,
+            Message=str(Message),
+            Subject=str(Subject)
+        )
+        logger.info("response SNS: {}".format(response))
+        emr.put_error_cloudwatch(error_log_group, str(Message))
+    except Exception as e:
+        logger.info('Error SNS: {}'.format(e))
+    return response
+
+
+def error_task(context):
+    instance = context['task_instance']
+    logger.info('context-taks-error')
+    logger.info(context)
+    dag_config = read_config()
+    Topic = dag_config['Topic']
+    Message = "Error - LR fetch data dag: Please review log in Airflow for more information."
+    resp = send_sns(Topic, Message, Subject)
+    return True
+
+
+def stop_task(**kwargs):
+    logger.info('dag Run_id : {}'.format(kwargs['dag_run'].run_id))
+    return True
+
+
+def get_secret_manager(connection_key, target=None):
+    try:
+        sm_client = boto3.client('secretsmanager', region_name=region)
+        get_secret_value_response = sm_client.get_secret_value(
+            SecretId=connection_key)
+    except ClientError as e:
+        if e.response['Error']['Code'] == 'DecryptionFailureException':
+            # Secrets Manager can't decrypt the protected secret text using the provided KMS key.
+            # Deal with the exception here, and/or rethrow at your discretion.
+            print(e)
+            raise e
+        elif e.response['Error']['Code'] == 'InternalServiceErrorException':
+            # An error occurred on the server side.
+            # Deal with the exception here, and/or rethrow at your discretion.
+            print(e)
+            raise e
+        elif e.response['Error']['Code'] == 'InvalidParameterException':
+            # You provided an invalid value for a parameter.
+            # Deal with the exception here, and/or rethrow at your discretion.
+            print(e)
+            raise e
+        elif e.response['Error']['Code'] == 'InvalidRequestException':
+            # You provided a parameter value that is not valid for the current state of the resource.
+            # Deal with the exception here, and/or rethrow at your discretion.
+            print(e)
+            raise e
+        elif e.response['Error']['Code'] == 'ResourceNotFoundException':
+            # We can't find the resource that you asked for.
+            # Deal with the exception here, and/or rethrow at your discretion.
+            print(e)
+            raise e
+
+    secretstring = get_secret_value_response['SecretString'].replace('\n', '')
+
+    secret = json.loads(secretstring)
+    connection = secret[target]
+    return connection
+
+
+
+def get_connection():
+    dag_config = read_config()
+    sm_name = dag_config['sm_name']
+    print(sm_name)
+    connection = get_secret_manager(sm_name,"alr_validation")
+    try:
+        host = connection['url']
+        logger.info("host : {} ".format(host))
+        c_conn = psycopg2.connect(host=host, user=connection['username'], password=connection['password'],
+                                  database=connection['db_name'], port= connection['port'])
+    except Exception as e:
+        print(e)
+        print("ERROR: Unexpected error: Could not connect to the instance.")
+        raise e
+    return c_conn
+
+
+
+def get_rltv_mo():
+    _records = None
+    rltv_mo = []
+    sql = "select distinct rltv_mo from clr.study_to_reprocess where validation_run_date is null order by rltv_mo"
+
+    logger.info("sql : {} ".format(sql))
+    try:
+        c_conn = get_connection()
+        cursor = c_conn.cursor()
+        cursor.execute(sql)
+        _records = cursor.fetchall()
+        for row in _records:
+            rltv_mo.append(row[0])
+        c_conn.commit()
+    except psycopg2.DatabaseError as e:
+        if c_conn:
+            c_conn.rollback()
+        print("Error=>" + str(e))
+    except Exception as e:
+        print("Error=>" + str(e))
+    finally:
+        if c_conn:
+            cursor.close()
+            c_conn.close()
+    return rltv_mo
+
+
+def get_audit_alr(audit_id, etl_process_detail_id, sm, key, process_steps=None):
+    error_audit = True
+    error_msg = None
+    process_steps = 1 if process_steps is None else process_steps
+    logger.info(process_steps)
+    try:
+        logger.info('Audit_Id: {}'.format(audit_id))
+        logger.info('Process ID: {}'.format(etl_process_detail_id))
+        conn, error_msg = emr.get_connetion_audit(sm, key)
+        print(conn)
+        if conn is not None:
+            cur = conn.cursor()
+            sql = "SELECT etl_process_status, target_name, step, etl_process_rows, etl_process_id, etl_process_run_date, audit_id, etl_process_detail_id FROM clr.css_audit where audit_id = '{}' and etl_process_detail_id = '{}'".format(
+                audit_id, etl_process_detail_id)
+            logger.info(sql)
+            cur.execute(sql)
+            r_audit = cur.fetchall()
+            print(*r_audit, sep="\n")
+            if len(r_audit) > 0:
+                target_write = [
+                    item for item in r_audit if item[2] == 'target-write']
+                only_error = [item for item in r_audit if item[0] == 'error']
+                # if len(target_write) != process_steps:
+                #     logger.info('Error: {}'.format(target_write))
+                #     error_msg = 'ED124 - Audit is not matching with Process step: return: {}'.format(
+                #         str(target_write))
+                if len(only_error) > 0:
+                    logger.info('Error: {}'.format(only_error))
+                    error_msg = 'ED126 - Audit encountered error in one or more process step, return: {}'.format(
+                        str(only_error))
+                else:
+                    error_audit = False
+            else:
+                error_msg = 'ED125 - Audit is must be greater than zero'
+            cur.close()
+            conn.close()
+    except Exception as e:
+        error_audit = True
+        error_msg = e
+        logger.error(e)
+    return error_audit, error_msg
+
+def fetch_data(rltv_mo, code_args, cluster_dns, audit_id, process_id ):
+
+    dag_config = read_config()
+    Topic = dag_config['Topic']
+    error_log_group = dag_config['error_log_group']
+    code_bucket_name= dag_config['code_bucket_name']
+    sm_name = dag_config['sm_name']
+
+    error_audit = True
+    code_file = 'local:/home/hadoop/loadresearch.py'
+    code_args =[]
+    code_args.append("-u {}/loadresearch/process_reprocess_loadresearch.json".format(code_bucket_name))
+    code_args.append("-z 200")
+    code_args.append("-j {}".format(audit_id))
+    code_args.append("-m {}".format(rltv_mo))
+    code_args.append("-a reprocess")
+    code_args.append("-t {}".format(Topic))
+    code_args.append("-g {}".format(error_log_group))
+    code_args.append("-d {}".format(dag_name))
+
+
+    logger.info(code_args)
+
+    data = {"file": code_file, "args": code_args,
+            "conf": {"livy.spark.deployMode": "client", "spark.yarn.appMasterEnv.PYSPARK_PYTHON": "/usr/bin/python3",
+                     "spark.executorEnv.PYSPARK_PYTHON": "/usr/bin/python3",
+                     "livy.spark.yarn.appMasterEnv.PYSPARK_PYTHON": "/usr/bin/python3",
+                     "livy.spark.yarn.executorEnv.PYTHONHOME": "/usr/bin/python3"}}
+
+    logger.info(data)
+    try:
+        headers, id = emr.submit_spark_script(cluster_dns, data)
+        error_audit, error_msg = get_audit_alr(audit_id, process_id, sm_name, 'audit_rds', 4)
+    except Exception as e:
+        logger.info('Error: {}'.format(e))
+
+    if error_audit == True:
+        error_msg = 'Please review Airflow logs. One or more processes might have failed.'
+        resp = send_sns(Topic, error_msg, Subject)
+
+    return error_audit
+
+
+def validations(rltv_mo, code_args, cluster_dns, audit_id ):
+
+    dag_config = read_config()
+    Topic = dag_config['Topic']
+    error_log_group = dag_config['error_log_group']
+    sm_name = dag_config['sm_name']
+
+    code_file = 'local:/home/hadoop/data/validations.py'
+    code_args =[]
+    code_args.append("-a {}".format(audit_id))
+    code_args.append("-g {}".format(rltv_mo))
+    code_args.append("-p reprocess")
+    code_args.append("-s {}".format(sm_name.strip()))
+    code_args.append("-e {}".format(Topic))
+    code_args.append("-c {}".format(error_log_group))
+    #code_args.append("-d {}".format(dag_name))
+    logger.info(code_args)
+
+    data = {"file": code_file, "args": code_args,
+            "conf": {"livy.spark.deployMode": "client", "spark.yarn.appMasterEnv.PYSPARK_PYTHON": "/usr/bin/python3",
+                     "spark.executorEnv.PYSPARK_PYTHON": "/usr/bin/python3",
+                     "livy.spark.yarn.appMasterEnv.PYSPARK_PYTHON": "/usr/bin/python3",
+                     "livy.spark.yarn.executorEnv.PYTHONHOME": "/usr/bin/python3"}}
+
+    logger.info(data)
+    try:
+        headers, id = emr.submit_spark_script(cluster_dns, data)
+    except Exception as e:
+        logger.info('Error: {}'.format(e))
+    return True
+
+
+def lse_file(rltv_mo, code_args, cluster_dns ):
+    _folder = 'lse_reprocess'
+
+    dag_config = read_config()
+    Topic = dag_config['Topic']
+    error_log_group = dag_config['error_log_group']
+    sm_name = dag_config['sm_name']
+    s3sftp = dag_config['s3sftp']
+
+    code_file = 'local:/home/hadoop/lse/lse.py'
+    code_args =[]
+
+    code_args.append("-b {}".format(rltv_mo))
+    code_args.append("-p Reprocessed")
+    code_args.append("-s {}".format(sm_name.strip()))
+    code_args.append("-k {}".format(s3sftp.strip()))
+    code_args.append("-t {}".format(Topic))
+    code_args.append("-g {}".format(error_log_group))
+    code_args.append("-d {}".format(dag_name))
+
+    logger.info("Value of {} for key=rltv_mo".format(rltv_mo))
+
+
+    logger.info(code_args)
+
+    data = {"file": code_file, "args": code_args,
+            "conf": {"livy.spark.deployMode": "client", "spark.yarn.appMasterEnv.PYSPARK_PYTHON": "/usr/bin/python3",
+                     "spark.executorEnv.PYSPARK_PYTHON": "/usr/bin/python3",
+                     "livy.spark.yarn.appMasterEnv.PYSPARK_PYTHON": "/usr/bin/python3",
+                     "livy.spark.yarn.executorEnv.PYTHONHOME": "/usr/bin/python3"}}
+
+    logger.info(data)
+    try:
+        headers, id = emr.submit_spark_script(cluster_dns, data)
+    except Exception as e:
+        logger.info('Error: {}'.format(e))
+    return True
+
+
+
+def readiness(code_args, cluster_dns):
+    code_file = 'local:/home/hadoop/data/readiness.py'
+    code_args =[]
+    print(code_file)
+    dag_config = read_config()
+    Topic = dag_config['Topic']
+    error_log_group = dag_config['error_log_group']
+    sm_name = dag_config['sm_name']
+
+    code_args.append("-s {}".format(sm_name.strip()))
+    #code_args.append("-t {}".format(Topic))
+    #code_args.append("-g {}".format(error_log_group))
+    #code_args.append("-d {}".format(dag_name))
+    data = {"file": code_file, "args": code_args,
+            "conf": {"livy.spark.deployMode": "client", "spark.yarn.appMasterEnv.PYSPARK_PYTHON": "/usr/bin/python3",
+                     "spark.executorEnv.PYSPARK_PYTHON": "/usr/bin/python3",
+                     "livy.spark.yarn.appMasterEnv.PYSPARK_PYTHON": "/usr/bin/python3",
+                     "livy.spark.yarn.executorEnv.PYTHONHOME": "/usr/bin/python3"}}
+    print(data)
+    try:
+        headers, id = emr.submit_spark_script(cluster_dns, data)
+        print('DONE')
+    except Exception as e:
+        logger.info('Error: {}'.format(e))
+    return True
+
+
+def transform_emr_livy_lr(**kwargs):
+    ti = kwargs['ti']
+    cluster_id = ti.xcom_pull(task_ids='create_cluster')
+    cluster_dns = emr.get_cluster_dns(cluster_id)
+    logger.info(cluster_dns)
+    logger.info('Process ID: {}'.format(kwargs['process_name']))
+    process_id = 'loadresearch'
+    #audit_id = "{}-{}".format(kwargs['process_name'], kwargs['dag_run'].run_id)
+
+    p_start_date = kwargs['dag_run'].conf['p_start_date'] if kwargs['dag_run'].conf else running_date
+    logger.info("Value of {} for key=p_start_date".format(p_start_date))
+    #c_date = str(datetime.strptime(p_start_date, '%Y%m%d').date() - relativedelta(days=1))
+    #logger.info("Value of c_date = {} ".format(c_date))
+    rltv_mo_list = get_rltv_mo()
+    print(rltv_mo_list)
+
+    dag_config = read_config()
+    Topic = dag_config['Topic']
+    error_log_group = dag_config['error_log_group']
+
+    code_args = kwargs['code_args']
+    code_args.append("-t {}".format(Topic))
+    code_args.append("-g {}".format(error_log_group))
+    code_args.append("-d {}".format(dag_name))
+
+    # fecth data
+    i=1
+    for rltv_mo in rltv_mo_list:
+        logger.info("Value of rltv_mo = {} ".format(rltv_mo))
+        audit_id = "{}{}{}".format(kwargs['process_name'],rltv_mo, kwargs['dag_run'].run_id)
+        error_audit = fetch_data(rltv_mo, code_args, cluster_dns, audit_id, process_id)
+        if error_audit == False:
+            validations(rltv_mo, code_args, cluster_dns, audit_id)
+            lse_file(rltv_mo, code_args, cluster_dns)
+            readiness(code_args, cluster_dns)
+    return True
+
+
+
+
+def backdate(**kwargs ):
+    p_start_date = kwargs['dag_run'].conf['p_start_date'] if kwargs['dag_run'].conf else running_date
+    logger.info("Value of {} for key=p_start_date".format(p_start_date))
+    c_date = str(datetime.strptime(p_start_date, '%Y%m%d').date())
+    logger.info("Value of c_date = {} ".format(c_date))
+    rltv_mo_list = get_rltv_mo()
+    print(rltv_mo_list)
+    if len(rltv_mo_list) == 0:
+        return 'stop_dag'
+    return 'create_cluster'
+
+
+
+
+check_backdate = BranchPythonOperator(
+    task_id='check_backdate',
+    python_callable=backdate,
+    dag=dag,
+)
+
+
+process_load_research = PythonOperator(
+    task_id='process_load_research',
+    python_callable=transform_emr_livy_lr,
+    op_kwargs={
+        'code_args': [],
+        'process_name': 'R',
+    },
+    on_failure_callback= error_task,
+    provide_context=True,
+    dag=dag)
+
+
+
+
+create_cluster = PythonOperator(
+    task_id='create_cluster',
+    python_callable=create_emr,
+    on_failure_callback= error_task,
+    provide_context=True,
+    dag=dag)
+
+
+
+terminate_cluster = PythonOperator(
+    task_id='terminate_cluster',
+    python_callable=terminate_emr,
+    on_failure_callback= error_task,
+    provide_context=True,
+    dag=dag)
+
+
+stop_dag = PythonOperator(
+    task_id='stop_dag',
+    python_callable=stop_task,
+    provide_context=True,
+    dag=dag)
+
+# setting the dependencies
+
+check_backdate >> [create_cluster, stop_dag]
+create_cluster >> process_load_research >> terminate_cluster
