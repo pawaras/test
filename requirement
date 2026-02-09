@@ -1,0 +1,107 @@
+Summary: Design and integrate an AIpowered summary service that pulls recent customer activity from DynamoDB and IVR intent, then surfaces it in Salesforce CRM for agents at calltime. 
+App Code/ NEE Code: 
+  
+🔍 Expanded Functional Requirements 
+1. Data Ingestion & Preparation 
+•	Customer Identification  
+o	Each call session must pass a unique customer_id (primary key) from IVR → Salesforce → AI service. 
+•	Transaction & Touchpoint Retrieval  
+o	Query DynamoDB for the last x number of interactions domain associated with intent 
+o	Retrieve up to # most recent events, filtered by relevance (payments, complaints, renewals, cancellations, service requests). 
+	Create summary of insights if no IVR intents based on Hierarchy of intent priorization (outage, power quality, collections, payment, billing) 
+o	Events must include:  
+	event_type (payment, complaint, renewal, etc.) 
+	event_date 
+	event_description 
+	channel (voice, chat, email, web) 
+	status (open, closed, pending) 
+•	IVR Intent Capture  
+o	IVR exit intent must be passed into the AI model as a contextual signal. 
+o	All intents need to be supported 
+  
+2. AI Summary Generation 
+•	Input Schema  
+•	{ 
+•	  "customer_id": "12345", 
+•	  "ivr_intent": "billing inquiry", 
+•	  "recent_transactions": [ 
+•	    {"event_type":"payment","event_date":"2025-11-20","status":"late","channel":"web"}, 
+•	    {"event_type":"complaint","event_date":"2025-11-15","status":"open","channel":"voice"} 
+•	  ] 
+•	} 
+•	Output Schema  
+•	{ 
+•	  "summary_text": "Customer recently made a late payment on Nov 20 and filed a complaint about billing issues last week. IVR intent indicates billing inquiry.", 
+•	  "highlights": [ 
+•	    "Late payment on Nov 20", 
+•	    "Open complaint filed Nov 15" 
+•	  ], 
+•	  "confidence_score": 0.92 
+•	} 
+•	AI Processing Rules  
+o	Summarize in 3–5 sentences maximum. 
+o	Prioritize events relevant to IVR intent. 
+o	Highlight unresolved issues (open complaints, pending renewals). 
+o	Suppress redundant events (e.g., multiple successful payments). 
+o	Include contextual hints (e.g., “Customer likely calling about billing due to recent late payment + IVR intent”). 
+  
+3. Salesforce CRM Integration 
+•	Trigger Point  
+o	Summary must be generated when agent retrieves account during call pop-up. 
+•	UI Component  
+o	In account360 omnichannel card 
+o	Display format:  
+	Summary text (AI-generated narrative). 
+	Highlights list (bullet points). 
+	Timestamp of last update. 
+•	Agent Feedback  
+o	Agents can rate summary (“Helpful / Not Helpful”). 
+o	Feedback stored in DynamoDB for model retraining. 
+  
+4. Workflow & Interaction 
+•	Call Flow  
+1.	Customer enters IVR → exits with intent. 
+2.	IVR passes customer_id + ivr_intent to Salesforce. 
+3.	Salesforce triggers API call to AI summary service. 
+4.	AI service queries DynamoDB for recent events. 
+5.	AI generates summary and returns to Salesforce. 
+6.	Agent sees summary in Account Overview panel. 
+•	Error Handling  
+1.	If AI service fails, fallback to raw event list from DynamoDB. 
+1.	Display message: “Summary unavailable, showing recent events.”S 
+  
+5. Filtering & Relevance Rules 
+•	Event Prioritization  
+o	Show unresolved issues first (open complaints, active outage orders, pending renewals). 
+o	Show financial events second (late payments, refunds). 
+o	Show service interactions third (support tickets, chat transcripts).S 
+•	Time Sensitivity  
+o	Events older than #days excluded unless directly relevant to IVR intent. 
+•	Channel Awareness  
+o	Include cross-channel context (e.g., “Customer emailed support yesterday and called last week”). 
+  
+6. Performance & Latency 
+•	Response Time  
+o	AI summary must return within 2 seconds. 
+•	Scalability  
+o	Must support peak load of 10k concurrent requests. 
+•	Caching  
+o	Cache summaries for 5 minutes to reduce duplicate queries during same call session. 
+  
+7. Security & Compliance 
+•	Data Handling  
+o	Only authorized agents can view summaries. 
+o	No PII beyond what is already visible in Salesforce. 
+•	Audit Logging  
+o	Log all AI outputs with timestamp, customer_id, and confidence_score. 
+o	Store logs in DynamoDB for compliance and retraining. 
+•	Ability to disable summary generation call from IVR and Salesforce by admin console.  
+•	Reporting and analytics: 
+o	Keep log of summaries generated per contract account linked to the call id/contact id  
+o	Fields to include but not limited to: 
+	Contract account 
+	Contact id (to be passed by SF/IVR when summary generation is invoked) 
+	Channel summary was triggered by 
+	Time/date 
+	User feedback (helpful/not helpful) 
+
