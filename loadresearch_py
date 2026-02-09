@@ -1,6 +1,7 @@
 import sys
 
 import botocore
+import numpy as np
 from botocore.exceptions import ClientError
 from pyspark.sql import *
 from pyspark.sql.functions import *
@@ -23,18 +24,17 @@ from connection.sqlserver import *
 from output.hudi_writer import *
 from data.interpolation import *
 
-
-
 from multiprocessing.dummy import Pool as ThreadPool
 import multiprocessing as mp
 import multiprocessing
+import time
 
 
 MSG_FORMAT = '%(asctime)s %(levelname)s %(name)s: %(message)s'
 DATETIME_FORMAT = '%Y-%m-%d %H:%M:%S'
 logging.basicConfig(format=MSG_FORMAT, datefmt=DATETIME_FORMAT)
 logger = logging.getLogger('cs-data-load')
-logger.setLevel(logging.WARN)
+logger.setLevel(logging.ERROR)
 #new paremeters
 premise_list=""
 rate_list=""
@@ -66,6 +66,7 @@ arl_schema = StructType([StructField('premiseid',StringType(),True),
                          StructField('netmeter',IntegerType(),True),
                          StructField('goodintvcount',LongType(),True),
                          StructField('badintvcount',LongType(),True),
+                         StructField('interpolated', LongType(), True),
                          StructField('spi_check',LongType(),True),
                          StructField('kwh',DecimalType(38,4),True),
                          StructField('spi',IntegerType(),True)])
@@ -82,6 +83,53 @@ lse_schema = StructType([StructField('premiseid',StringType(),True),
                         StructField('uom',StringType(),True),
                         StructField('spi',IntegerType(),True),
                         StructField('status',IntegerType(),True)])
+
+def put_error_cloudwatch(region, log_group, error_msg):
+    client = boto3.client('logs', region_name=region)
+
+    logGroupName = log_group
+    logStreamName = f"{log_group}-" + datetime.utcnow().__str__().replace(":", "")
+
+    log_stream = client.create_log_stream(
+        logGroupName=logGroupName,
+        logStreamName=logStreamName
+    )
+
+    log_event = client.put_log_events(
+        logGroupName=logGroupName,
+        logStreamName=logStreamName,
+        logEvents=[
+            {
+                'timestamp': int(time.time() * 1000),
+                'message': str(error_msg)
+            }
+        ]
+    )
+
+
+def send_sns(region, Topic, Message, Subject):
+    response = None
+    try:
+        sns = boto3.client('sns', region_name=region)
+        response = sns.publish(
+            TopicArn=Topic,
+            Message=str(Message),
+            Subject=str(Subject)
+        )
+        print("response SNS: {}".format(response))
+    except Exception as e:
+        print('Error SNS: {}'.format(e))
+    return response
+
+
+def write_error(region_name, Topic, cw_log_group, eSubjectName ,eerror):
+    if Topic != None:
+        send_sns(region_name, Topic, eerror, eSubjectName[:100])
+
+    if cw_log_group != None:
+        put_error_cloudwatch(region_name, cw_log_group, eerror)
+
+
 
 
 def get_connection_jdbc(sm_client, connection_key, target=None):
@@ -217,19 +265,19 @@ def create_target(db_target, _df, spark, base_url):
 
 
 def get_spark_env(_parallelism):
-    conf = SparkConf().set("spark.jars", "/usr/lib/hudi/hudi-spark-bundle.jar,/usr/lib/hudi/hudi-hadoop-mr-bundle.jar,/home/hadoop/jars/postgresql-42.2.12.jar,/home/hadoop/jars/mssql-jdbc-8.2.2.jre8.jar,/home/hadoop/jars/cobol-parser-0.2.5.jar,/home/hadoop/jars/spark-cobol-0.2.5.jar,/home/hadoop/jars/scodec-core_2.11-1.10.3.jar,/home/hadoop/jars/scodec-bits_2.11-1.1.4.jar")\
-        .set('spark.executor.memory', '37G')\
-        .set('spark.driver.memory', '37G') \
-        .set("spark.executor.memoryOverhead", "5g") \
-        .set('spark.kryoserializer.buffer.max', '128m')
+    conf = SparkConf().set("spark.jars", "/usr/lib/hudi/hudi-spark-bundle.jar,/usr/lib/hudi/hudi-hadoop-mr-bundle.jar,/home/hadoop/jars/RedshiftJDBC42-no-awssdk-1.2.55.1083.jar,/home/hadoop/jars/ngdbc-2.10.15.jar,/home/hadoop/jars/postgresql-42.2.12.jar,/home/hadoop/jars/mssql-jdbc-8.2.2.jre8.jar,/home/hadoop/jars/cobol-parser-0.2.5.jar,/home/hadoop/jars/spark-cobol-0.2.5.jar,/home/hadoop/jars/scodec-core_2.11-1.10.3.jar,/home/hadoop/jars/scodec-bits_2.11-1.1.4.jar")\
+        .set('spark.executor.memory', '115G')\
+        .set('spark.driver.memory', '115G') \
+        .set("spark.executor.memoryOverhead", "16g") \
+        .set('spark.kryoserializer.buffer.max', '256m')
 
-#/usr/lib/spark/jars/spark-avro.jar,
+
     spark = SparkSession.builder. \
         appName("loadresearch"). \
         config(conf=conf). \
         getOrCreate()
 
-
+    spark.sparkContext.setLogLevel('ERROR')
 
     spark.conf.set("spark.sql.hive.convertMetastoreParquet", "false")  # set for HUDI
     spark.conf.set("spark.sql.sources.partitionOverwriteMode", "dynamic")
@@ -248,7 +296,7 @@ def get_spark_env(_parallelism):
 
     spark.conf.set("spark.sql.session.timeZone", "America/New_York")
     #spark.conf.set('spark.sql.legacy.parquet.datetimeRebaseModeInRead','LEGACY')
-    #spark.conf.set("spark.eventLog.enabled", "false")
+    # spark.conf.set("spark.eventLog.enabled", "false")
     #spark.conf.set("spark.sql.legacy.allowCreatingManagedTableUsingNonemptyLocation", "true")
 
     spark.conf.set("spark.sql.adaptive.enabled", "true")
@@ -259,7 +307,7 @@ def get_spark_env(_parallelism):
 
 
 def setup_boto3(region):
-    botoconfig = botocore.config.Config(proxies={'https': 'http://webproxyeva.fpl.com:8080'})
+    botoconfig = botocore.config.Config(proxies={'https': 'http://EVAPzen.fpl.com:10262'})
     s3_client = boto3.client('s3')
     s3_resource = boto3.resource('s3')
     athena = boto3.client('athena', region_name=region, config=botoconfig)
@@ -302,34 +350,30 @@ def pool_big_sql(sql, pool_list , ranges_list , process_to_dataframe, connection
     return _union_df
 
 
-def to_process(spark,  process_step, process_run_date, job_run_id, region_name, p_start_date, p_end_date, rltv_greg_mo, backdate):
+def to_process(spark,  process_step, process_run_date, job_run_id, region_name, p_start_date, p_end_date, rltv_greg_mo, backdate, cw_log_group, Topic, eSubjectName):
     try:
         sc_RDD = spark.sparkContext.emptyRDD()
         print(sys.version)
         base_url = "{}/".format(process_step.rsplit("/", 1)[0])
         print(base_url)
+        eerror = None
 
         actual_datetime = str(datetime.now().strftime('%Y%m%d%H%M%S'))
         #mada_table_name = "all_mada_bkt_{}".format(actual_datetime)
 
-        nm_mass_market_nm = spark.createDataFrame(data=sc_RDD, schema = arl_schema)
-        not_nm_mass_market = spark.createDataFrame(data=sc_RDD, schema = arl_schema)
-        power_billing = spark.createDataFrame(data=sc_RDD, schema = arl_schema)
-
-        lse_not_nm = spark.createDataFrame(data=sc_RDD, schema = lse_schema)
-        lse = spark.createDataFrame(data=sc_RDD, schema = lse_schema)
-        lse_pb = spark.createDataFrame(data=sc_RDD, schema = lse_schema)
 
         if rltv_greg_mo != None :
             dte = datetime.strptime(str(rltv_greg_mo), '%Y%m').date()
             bill_from_date = (dte + relativedelta(months=-1)).strftime("%Y-%m-%d")
             bill_to_date = (dte + relativedelta(months=1)).strftime("%Y-%m-%d")
-            bill_end = (dte + relativedelta(months=4)).strftime("%Y-%m-%d")  # added 2 montsh
+            bill_end = (dte + relativedelta(months=12)).strftime("%Y-%m-%d")
             bill_start = (dte + relativedelta(months=-1)).strftime("%Y-%m-%d")
-            min_bill_date = (dte + relativedelta(months=-13)).strftime("%Y-%m-%d")
+            min_bill_date = (dte + relativedelta(months=-14)).strftime("%Y-%m-%d")
+            bill_4_months = (dte + relativedelta(months=4)).strftime("%Y%m%d")
 
 
         r_audit = []
+        _elt_df = None
         audit_datetime_start = datetime.strptime(str(datetime.now().strftime('%Y-%m-%d-%H:%M:%S')), '%Y-%m-%d-%H:%M:%S')
         s3_client, s3_resource, athena, sm_client, boto3_session = setup_boto3(region_name)
         print('starting')
@@ -358,6 +402,31 @@ def to_process(spark,  process_step, process_run_date, job_run_id, region_name, 
         for process_item in process_list_step:
             post_actions_list = []
             stepsList = list(process_item['sources'])
+            company = process_item['company']
+
+            nm_mass_market_nm = spark.createDataFrame(data=sc_RDD, schema=arl_schema)
+            not_nm_mass_market = spark.createDataFrame(data=sc_RDD, schema=arl_schema)
+            power_billing = spark.createDataFrame(data=sc_RDD, schema=arl_schema)
+
+            lse_not_nm = spark.createDataFrame(data=sc_RDD, schema=lse_schema)
+            lse = spark.createDataFrame(data=sc_RDD, schema=lse_schema)
+            lse_pb = spark.createDataFrame(data=sc_RDD, schema=lse_schema)
+
+            _pb_accounts = None
+            _meters = None
+            _mada = None
+            all_mada = None
+            df_study = None
+            df_study_premise = None
+
+            timezone = "America/New_York"
+            if company == 'FPL':
+                #timezone = "America/New_York"
+                interval_frec = 'INTERVAL 1 DAY'
+            else:
+                #timezone = "America/Chicago"
+                interval_frec = 'INTERVAL 0 DAY'
+
             target_list = list(process_item['target'])
             if 'post_action' in process_item:
                 post_actions_list = list(process_item['post_action'])
@@ -369,9 +438,12 @@ def to_process(spark,  process_step, process_run_date, job_run_id, region_name, 
 
             logger.info("To Process {}".format(processed_sqls))
             etl_process_order = process_item['process_order']
+            break_process = False
 
             for item in processed_sqls:
                 continue_process = True
+                if break_process == True:
+                    continue
                 df = None
                 columnsList = list(item['new_columns'])
 
@@ -441,6 +513,116 @@ def to_process(spark,  process_step, process_run_date, job_run_id, region_name, 
                         task_options = {'file_config': file_config}
                         df = pool_big_sql(sql, pool_list, ranges_list, process_to_dataframe, connection_task, task_options)
 
+                elif file_config['sql_type'].upper() == 'REDSHIFT_UNLOAD':
+
+                    original_policy = spark.conf.get("spark.sql.legacy.timeParserPolicy")
+
+                    try:
+                        spark.conf.set("spark.sql.legacy.timeParserPolicy", "LEGACY")
+                        # pool_list = None
+                        connection_destination = get_connection_jdbc(sm_client, connection_key, 'alr_s3')
+                        s3_path = 's3://{}/{}/{}'.format(connection_destination['data_bucket_name'], backdate + '_unload','filename_')
+
+                        # Parse S3 path
+                        # s3_path = file_config['s3_path']
+                        s3_parts = s3_path.replace('s3://', '').split('/', 1)
+                        bucket_name = s3_parts[0]
+                        prefix = s3_parts[1] if len(s3_parts) > 1 else ''
+
+                        # Delete existing files
+                        s3_client = boto3.client('s3')
+                        response = s3_client.list_objects_v2(Bucket=bucket_name, Prefix=prefix)
+
+                        if 'Contents' in response:
+                            delete_objects = [{'Key': obj['Key']} for obj in response['Contents']]
+                            s3_client.delete_objects(
+                                Bucket=bucket_name,
+                                Delete={'Objects': delete_objects}
+                            )
+                            print(f"Cleared {len(delete_objects)} existing files from {s3_path}")
+
+                        sql = file_config['sql']
+
+                        if 'parameters' in file_config:
+                            if file_config['parameters'] != None:
+                                sql = sql.format(*_p)
+                        if 'parameters_to_replace' in file_config:
+                            if file_config['parameters_to_replace'] != None:
+                                for pr in file_config['parameters_to_replace']:
+                                    if eval(pr) == None:
+                                        continue_process = False
+                                    else:
+                                        sql = sql.replace(pr, eval(pr))
+
+                        connection_iam = get_connection_jdbc(sm_client, connection_key, 'iam_role')
+                        iam_role = connection_iam['unload_iam']
+                        delimiter = '|'
+                        gzip_option = 'GZIP'
+                        overwrite_option = 'ALLOWOVERWRITE'
+                        maxfilesize = 60
+
+                        # Build UNLOAD command
+                        unload_command = f"""
+                        UNLOAD ($${sql}$$) 
+                        TO '{s3_path}' 
+                        IAM_ROLE '{iam_role}' 
+                        DELIMITER '{delimiter}' 
+                        {gzip_option} 
+                        {overwrite_option}
+                        MAXFILESIZE {maxfilesize}
+                        """.strip()
+
+                        unload_command = to_fStrings(unload_command)
+
+                        print(datetime.strptime(str(datetime.now().strftime('%Y-%m-%d-%H:%M:%S')), '%Y-%m-%d-%H:%M:%S'))
+                        # Execute unload in Redshift
+                        try:
+                            # Execute unload in Redshift
+                            connection_redshift = get_connection_jdbc(sm_client, connection_key, item['source']) if item['source'] != 'sparksql' else None
+                            postgres_connection = PostgresSQLConnection(connection_redshift)
+                            postgres_connection.execute_actions(unload_command)
+
+                            print(f"UNLOAD completed to: {s3_path}")
+
+                            # Read back from S3
+                            df = spark.read \
+                                .option("delimiter", delimiter) \
+                                .option("inferSchema", "true") \
+                                .option("header", "false") \
+                                .csv(s3_path + "*.gz")
+
+                            # CHECK FOR EMPTY DATAFRAME BEFORE PROCESSING
+                            try:
+                                # Evaluation to check if DataFrame has data
+                                row_count = df.count()
+
+                                if row_count == 0:
+                                    continue_process = False
+                                    print(f"No data returned from UNLOAD for {item['temp_dataframe']} - DataFrame is empty (0 rows)")
+                                else:
+                                    print(f"UNLOAD successful: {row_count} rows")
+
+                                    # Add column names only if DataFrame has data
+                                    if 'column_names' in file_config:
+                                        column_names = file_config['column_names']
+                                        for i, col_name in enumerate(column_names):
+                                            df = df.withColumnRenamed(f"_c{i}", col_name)
+
+                            except Exception as e:
+                                continue_process = False
+                                print(f"Error checking DataFrame for {item['temp_dataframe']}: {e}")
+
+                        except Exception as e:
+                            continue_process = False
+                            print(f"UNLOAD/Read operation failed for {item['temp_dataframe']}: {e}")
+
+                        print(datetime.strptime(str(datetime.now().strftime('%Y-%m-%d-%H:%M:%S')), '%Y-%m-%d-%H:%M:%S'))
+
+                    finally:
+                        # ALWAYS RESTORE ORIGINAL SETTING (even if error occurs)
+                        spark.conf.set("spark.sql.legacy.timeParserPolicy", original_policy)
+                        print(f"Restored timeParserPolicy to: {original_policy}")
+
                 else:
                     sql = file_config['sql']
                     if 'parameters' in file_config:
@@ -458,7 +640,15 @@ def to_process(spark,  process_step, process_run_date, job_run_id, region_name, 
                     if continue_process == True:
                         connection_task = get_connection_jdbc(sm_client, connection_key, item['source']) if item['source'] != 'sparksql' else None
                         task_options = {'file_config': file_config}
-                        df = process_to_dataframe.read_from_jdbc(connection_task, sql, task_options)
+                        if 'pool' in file_config:
+                            if file_config['pool'] != None:
+                                pool_list = file_config['pool']
+                                df = pool_big_sql(sql, pool_list, ranges_list, process_to_dataframe, connection_task,
+                                                  task_options)
+                            else:
+                                df = process_to_dataframe.read_from_jdbc(connection_task, sql, task_options)
+                        else:
+                            df = process_to_dataframe.read_from_jdbc(connection_task, sql, task_options)
 
                 if continue_process == True:
                     for metric in columnsList:
@@ -483,22 +673,23 @@ def to_process(spark,  process_step, process_run_date, job_run_id, region_name, 
 
                     df_study = df_study.withColumn('channels', F.when(F.col('channels').isNull(),array().cast("array<string>") ).otherwise(F.col('channels')))
                     df_study = df_study.withColumn('rate_list', F.array_union(F.coalesce(F.col("ratecodes").cast("array<string>"), array().cast("array<string>")), F.coalesce(F.col("population_link"),array().cast("array<string>") )))
-                    df_study =df_study.withColumn("rate_code", explode_outer (F.col('rate_list')))
-                    df_study =df_study.withColumn("channel", explode_outer(F.col('channels')))
+                    df_study = df_study.withColumn("rate_code", explode_outer (F.col('rate_list')))
+                    df_study = df_study.withColumn("channel", explode_outer(F.col('channels')))
                     df_study.cache()
                     df_study_count = df_study.count()
 
                     df_study = df.withColumn('rate_list', F.array_union(F.coalesce(F.col("ratecodes").cast("array<string>"), array().cast("array<string>")), F.coalesce(F.col("population_link"),array().cast("array<string>") )))
 
 
-                    _study_rate_nm = df_study.filter((F.upper(F.col('fetchtype')) == 'RATESTUDY') & (F.col('channels').isNotNull()))
+                    _study_rate_nm = df_study.filter((F.upper(F.col('fetchtype')) == 'RATESTUDY') & ((F.col('channels').isNotNull() | (F.size(F.col('channels'))> 0))))
                     _study_rate_nm = _study_rate_nm.agg(F.collect_list("rate_list").alias('rate_values'))
                     _study_rate_nm = _study_rate_nm.withColumn("rate_list", F.flatten("rate_values"))
                     _study_rate_nm = _study_rate_nm.withColumn("rate_list",array_distinct("rate_list"))
                     rate_list_nm = _study_rate_nm.select('rate_list').collect()[0]
                     rate_str_list_nm = ','.join(f"'{str(elem)}'" for elem in rate_list_nm.rate_list)
 
-                    _study_rate_not_nm = df_study.filter( (F.upper(F.col('fetchtype')) == 'RATESTUDY') & (F.col('channels').isNull()))
+                    # _study_rate_not_nm = df_study.filter( (F.upper(F.col('fetchtype')) == 'RATESTUDY') & ((F.col('channels').isNull()) | (F.size(F.col('channels'))== 0) | (F.col('studyid') == 'FPLC-RS1EV')))
+                    _study_rate_not_nm = df_study.filter((F.upper(F.col('fetchtype')) == 'RATESTUDY') & (~F.upper(F.col('studyid')).rlike('%NET%')))
                     _study_rate_not_nm = _study_rate_not_nm.agg(F.collect_list("rate_list").alias('rate_values'))
                     _study_rate_not_nm = _study_rate_not_nm.withColumn("rate_list", F.flatten("rate_values"))
                     _study_rate_not_nm = _study_rate_not_nm.withColumn("rate_list", array_distinct("rate_list"))
@@ -506,7 +697,9 @@ def to_process(spark,  process_step, process_run_date, job_run_id, region_name, 
                     rate_str_list_not_nm = ','.join(f"'{str(elem)}'" for elem in rate_list_not_nm.rate_list)
 
                     rate_list = list(set().union(rate_list_not_nm.rate_list,rate_list_nm.rate_list))
-                    rate_list = ','.join(f"'{str(elem)}'" for elem in rate_list)
+                    rate_list_net = ','.join(f"'{str(elem)}'" for elem in rate_list)
+                    exclude_values = ['44', '68', 'FERS_44', '69', 'FEGS_68', 'FEGSUM_68']
+                    rate_list = ','.join(f"'{str(elem)}'" for elem in rate_list if elem not in exclude_values)
 
 
 
@@ -522,33 +715,139 @@ def to_process(spark,  process_step, process_run_date, job_run_id, region_name, 
                     premise_condition = ''
                     rate_condition = ''
                     mada_condition ="0 = 1"
+                    nw_mada_condition = "0 = 1"
 
                     if (len(premise_list) != 0):
                         premise_condition = 'bdf.prem_num::int in ({})'.format(premise_list)
+                        nw_premise_condition = '((premiseid in ({})) or (premiseid = {}))'.format(premise_list,'70189542')
+                        uev_condition = 'apc.install_num::int in ({})'.format(premise_list)
 
                     if (len(rate_list) != 0):
-                        rate_condition = 'rate_schd_cd::varchar in ({})'.format(rate_list)
+                        rate_condition = '(coalesce(bdf.rate_schd_cd,bf.rate_schd_cd)::varchar in ({}) and coalesce(netmeter,0) = 0)'.format(rate_list)
+                        rate_condition_44 = '(coalesce(bdf.rate_schd_cd,bf.rate_schd_cd)::varchar in ({}) and coalesce(netmeter,0) = 1)'.format(rate_list_net)
+                        rate_condition = '{} or {}'.format(rate_condition_44, rate_condition)
+
+                        nw_rate_condition = '(ratecode in ({}) and coalesce(netmeter,0) = 0)'.format(rate_list)
+                        nw_rate_condition_44 = '(ratecode in ({}) and coalesce(netmeter,0) = 1)'.format(rate_list_net)
+                        nw_rate_condition = '{} or {}'.format(nw_rate_condition_44, nw_rate_condition)
 
                     if premise_condition:
                         mada_condition = premise_condition
+                        nw_mada_condition = nw_premise_condition
                         if rate_condition:
                             mada_condition = '{} or {}'.format(premise_condition, rate_condition)
+                            nw_mada_condition = '{} or {}'.format(nw_premise_condition, nw_rate_condition)
 
                     else:
                         if rate_condition:
                             mada_condition = rate_condition
-
-                    #mada_condition= 'bdf.prem_num::int in (549314120)'   #, 545877407
-
+                            nw_mada_condition = nw_rate_condition
+                            uev_condition = 'null'
 
 
                 if item['temp_dataframe'] == 'variable':
                     aumonth =int((df.select('value').filter(F.col('variableid')=='AUMONTH').collect()[0])[0])
-                    interval_months = aumonth + 2
+                    interval_months = aumonth #+ 2
+
+                    dte_rm = datetime.strptime(str(rltv_greg_mo), '%Y%m').date()
+                    bill_interval_months = (dte_rm - relativedelta(months=interval_months)).strftime("%Y%m")
+
                     intdatafirst = ((df.select('value').filter(F.col('variableid')=='INTDATAFIRST').collect()[0])[0])
                     intdatasecond = ((df.select('value').filter(F.col('variableid')=='INTDATASECOND').collect()[0])[0])
+
                     df_calendar_type = df.select('premiselist','variableid').filter(F.col('variableid').isin(["CALENDARBILL", "SUNDAYBILL"]))
                     df_calendar_type = df_calendar_type.withColumn("premiseid", explode_outer(F.col('premiselist'))) # pb_all.filter(F.col('variableid')=='SUNDAYBILL').show()
+
+                    df_standby = df.filter(F.col('variableid')=='STANDBY').select('premiselist', 'value')
+                    standbySeq = ((df_standby.select('value').collect()[0])[0])
+
+
+                    standbypremises = df_standby.agg(F.collect_list("premiselist").alias('premise_values'))
+                    standbypremises = standbypremises.withColumn("premise_list", F.flatten("premise_values"))
+                    standbypremises = standbypremises.withColumn("premise_list", array_distinct("premise_list"))
+                    standbypremises = standbypremises.select('premise_list').collect()[0][0]
+
+                    df_fplnnm = df.select('premiselist', 'variableid').filter(F.col('variableid').isin(["FPLNONNET"]))
+                    df_fplnnm = df_fplnnm.withColumn("premiseid", explode_outer(F.col('premiselist')))
+                    df_fplnnm = df_fplnnm.withColumn("fplnonnet", F.col('variableid'))
+
+
+                if item['temp_dataframe'] == 'uevmada':
+                    for col in df.columns:
+                        df = df.withColumnRenamed(col, col.lower())
+
+                    _uevmada = df
+                    _uevmada.cache()
+                    uev_mada_count = _uevmada.count()
+
+                    uevmada = _uevmada.join(df_study_premise.select('uev_site', 'premiseid', 'company').hint("broadcast"), ["uev_site"], 'inner')
+                    uevmada.cache()
+                    uevmada_count = uevmada.count()
+
+                    uevmada.createOrReplaceTempView('evmada')
+
+
+                if item['temp_dataframe'] == 'uevcust':
+                    for col in df.columns:
+                        df = df.withColumnRenamed(col, col.lower())
+
+                    df_uevcust = df
+                    df_uevcust.cache()
+                    df_uevcust_count = df_uevcust.count()
+
+                    df_uevcust.createOrReplaceTempView('uevcust')
+                    df_uevcust.unpersist()
+
+                    sql = "Select rltv_mo, m.accountid, m.premiseid, billstart, billstop, billkwh, avgmonthlykwh, num_months_monthlyavg, ratecode, wc_dist, customer, account_status, zipcode, cust_num, bill_date, streetaddress, billdays, null as netstart, null as netstop, netmeter, evkwh, uev_site, company, 1 as num_rows from evmada i \
+                                       inner join uevcust m on m.premiseid= i.premiseid"
+
+                    uevmada = spark.sql(sql)
+                    uevmada.cache()
+                    uevmada2_count = uevmada.count()
+
+                    _uev_nw = uevmada.filter(F.col('company') == 'FPLNW')
+
+                    sql = "Select rltv_mo, m.accountid, m.premiseid, billstart, billstop, billkwh, avgmonthlykwh, num_months_monthlyavg, ratecode, wc_dist, customer, account_status, zipcode, cust_num, bill_date, streetaddress, billdays, null as netstart, null as netstop, netmeter, evkwh, m.premiseid as uev_site, company, 1 as num_rows from evmada i \
+                                                           inner join uevcust m on m.premiseid= i.premiseid"
+
+                    uevpremise = spark.sql(sql)
+                    uevmada = uevmada.unionByName(uevpremise)
+                    uevmada.cache()
+                    uevmada3_count = uevmada.count()
+                    spark.catalog.dropTempView('uevcust')
+
+
+                    cols_nw = ["company", "uev_site","cust_num","billdays"]
+                    uev_nw = _uev_nw.drop(*cols_nw)
+                    uev_nw = uev_nw.withColumn('billstop', (
+                                F.to_utc_timestamp(uev_nw.billstop, timezone) - F.expr(interval_frec)).cast('date'))
+
+                    uev_nw.cache()
+                    uevnw_count = uev_nw.count()
+
+                    nw_premises = uev_nw.agg(F.collect_list("premiseid").alias('nw_premise_values'))
+                    nw_premises = nw_premises.withColumn("premise_list", array_distinct("nw_premise_values"))
+                    nw_premise_list = nw_premises.select('premise_list').collect()[0][0]
+                    # standbypremises = standbypremises.select('premise_list').collect()[0][0]
+
+                    cols_fpl = ["company", "netstart", "netstop","num_rows"]
+                    uevmada = uevmada.drop(*cols_fpl)
+
+                    uev_premises = uevmada.agg(F.collect_list("premiseid").alias('uev_premise_values'))
+                    uev_premises = uev_premises.withColumn("premise_list", array_distinct("uev_premise_values"))
+                    uev_premise_list = uev_premises.select('premise_list').collect()[0][0]
+
+                    all_uev_condition = "0 = 1"
+
+                    if uevmada3_count > 0:
+                        uev_sites = uevmada.agg(F.collect_list("uev_site").alias('uev_site_values'))
+                        uev_sites = uev_sites.withColumn("site_list", array_distinct("uev_site_values"))
+                        uev_site_list = uev_sites.select('site_list').collect()[0]
+                        # uev_all_list = ','.join(str(elem) for elem in uev_site_list.site_list)
+                        uev_all_list = ','.join("'{}'".format(str(elem)) for elem in uev_site_list.site_list)
+                        all_uev_condition = 's.site_id in ({})'.format(uev_all_list)
+                    else:
+                        all_uev_condition = 's.site_id in (null)'
 
 
                 if item['temp_dataframe'] == 'mada':
@@ -557,101 +856,185 @@ def to_process(spark,  process_step, process_run_date, job_run_id, region_name, 
                     pb_condition = None
                     fecth_to_date = None
                     fecth_from_date = None
+                    mada_duplicate = None
+
+                    for col in df.columns:
+                        df = df.withColumnRenamed(col, col.lower())
 
                     _mada = df
+
+                    # _mada = _mada.filter(F.col('premiseid') == 213571)
                     _mada = _mada.repartition(F.col("premiseid"), F.col("accountid"))
                     _mada.cache()
                     mada_count = _mada.count()
+                    _mada = _mada.filter(~(F.col('premiseid').isin(uev_premise_list)))
 
                     mada_p = _mada.join(df_study_premise.select('premiseid').hint("broadcast"), ["premiseid"], 'inner')
-                    mada_r = _mada.filter(df.ratecode.isin(rate_list_nm[0]))
-                    mada_r_not_nm = _mada.filter(df.ratecode.isin(rate_list_not_nm[0]))
+                    if company == 'FPL':
+                        mada_p = mada_p.unionByName(uevmada)
+
+                    if company == 'FPLNW':
+                        mada_p = mada_p.unionByName(uev_nw)
+
+                    mada_r = _mada.filter(_mada.ratecode.isin(rate_list_nm[0]))
+                    mada_r = mada_r.filter(F.col('netmeter') == 1)
+                    mada_r_not_nm = _mada.filter(_mada.ratecode.isin(rate_list_not_nm[0]))
 
                     _mada_all = mada_p.unionByName(mada_r).unionByName(mada_r_not_nm)
-                    _mada_all=_mada_all.dropDuplicates()
+                    _mada_all = _mada_all.dropDuplicates()
+                    _mada_all = _mada_all.repartition(F.col("premiseid"), F.col("accountid"))
+                    mada_all_count = _mada_all.count()
+                    print(mada_all_count)
 
-                    if _mada_all.rdd.isEmpty() == True:
+                    if mada_all_count == 0 and mada_count != 0:
+                        _mada_all = _mada
+                    elif mada_all_count == 0 and mada_count == 0:
                         _mada_all.createOrReplaceTempView('inter_mada_all')
-                        break
+                        break_process = True
+                        continue
+
+                    if company == 'FPLNW':
+                        _mada_all = _mada_all.withColumn('dupl1', F.row_number().over(
+                            Window.partitionBy(['premiseid', 'accountid', 'billstart']).orderBy(desc(F.col('bill_date')))))
+
+                        _mada_all = _mada_all.withColumn('dupl2', F.row_number().over(
+                            Window.partitionBy(['premiseid', 'accountid', 'billstop']).orderBy(desc(F.col('bill_date')))))
+                    else:
+                        _mada_all = _mada_all.withColumn('dupl1', F.row_number().over(
+                            Window.partitionBy(['premiseid', 'accountid', 'uev_site', 'billstart']).orderBy(
+                                desc(F.col('bill_date')))))
+
+                        _mada_all = _mada_all.withColumn('dupl2', F.row_number().over(
+                            Window.partitionBy(['premiseid', 'accountid', 'uev_site', 'billstop']).orderBy(
+                                desc(F.col('bill_date')))))
+
+                    _mada_all = _mada_all.filter((F.col('dupl1') == 1) & (F.col('dupl2') == 1))
+
+                    if company == 'FPLNW':
+                        mada_duplicate = _mada_all.filter(F.col('num_rows') > 1)
+                        mada_duplicate.show()
+                        mada_duplicate.createOrReplaceTempView('inter_mada_duplicate')
+                        _mada_all = _mada_all.filter(F.col('num_rows') == 1)
+
+                    print(_mada_all.count())
 
                     _mada_all = _mada_all.join(df_calendar_type.select('premiseid', 'variableid').hint("broadcast"),["premiseid"], 'left')
 
                     _mada_all = _mada_all.withColumn("billstart", F.when(F.col('variableid') == 'CALENDARBILL',F.trunc(F.col('billstart'), "month"))\
-                                               .otherwise(F.when(F.col('variableid') == 'SUNDAYBILL', previous_day(F.last_day(F.col('billstart')), 'SUN')) \
+                                               .otherwise(F.when(F.col('variableid') == 'SUNDAYBILL', previous_day(F.last_day(F.add_months(F.col('billstart'), -1)), 'SUN') ) \
                         .otherwise(F.col('billstart'))))
 
+
                     _mada_all = _mada_all.withColumn("billstop", F.when(F.col('variableid') == 'CALENDARBILL',F.add_months(F.trunc(F.col('billstart'), "month"), 1)) \
-                                               .otherwise(F.when(F.col('variableid') == 'SUNDAYBILL', previous_day(F.add_months(F.last_day(F.col('billstart')), 1), 'SUN')) \
+                                               .otherwise(F.when(F.col('variableid') == 'SUNDAYBILL', previous_day(F.last_day(F.add_months(F.col('billstop'), -1)), 'SUN') ) \
                                                           .otherwise(F.col('billstop'))))
 
-                    cols = ["variableid"]
+                    _mada_all = _mada_all.withColumn("billstart", F.when(F.col('variableid') == 'SUNDAYBILL',F.col('billstart') + F.expr('INTERVAL 1 DAY')) \
+                                                                .otherwise(F.col('billstart')))
+
+                    _mada_all = _mada_all.withColumn("billstop", F.when(F.col('variableid') == 'SUNDAYBILL', F.col('billstop') + F.expr('INTERVAL 1 DAY')) \
+                                                                .otherwise(F.col('billstop')))
+
+                    if company == 'FPL':
+                        _mada_all = _mada_all.join(df_fplnnm.select('premiseid', 'fplnonnet').hint("broadcast"),["premiseid"], 'left')
+                        _mada_all = _mada_all.withColumn("netmeter", F.when(F.col('fplnonnet') == 'FPLNONNET', F.lit(0)).otherwise(F.col('netmeter')))
+
+                    cols = ["variableid","dupl1","dupl2"]
                     _mada_all = _mada_all.drop(*cols)
 
-                    _mada_all = _mada_all.withColumn('interval_from_date', F.col("billstart").cast('timestamp')).withColumn('interval_to_date', (_mada_all.billstop - F.expr('INTERVAL 1 DAY')).cast('timestamp'))
-                    _mada_all = _mada_all.withColumn('interval_to_date',_mada_all.interval_to_date + F.expr('INTERVAL 23 HOURS'))
+                    _mada_all = _mada_all.withColumn('interval_from_date', F.col("billstart").cast('timestamp'))
+
+                    _mada_all = _mada_all.withColumn('interval_to_date',(F.to_utc_timestamp(_mada_all.billstop, timezone) - F.expr(interval_frec)).cast('date'))
+                    _mada_all = _mada_all.withColumn('interval_to_date', F.to_timestamp(F.concat(date_format(F.col('interval_to_date'), "yyyy-MM-dd"), F.lit(' 23:00:00')),'yyyy-MM-dd HH:mm:ss'))
+
+                    #_mada_all = _mada_all.withColumn('interval_to_date', _mada_all.interval_to_date + F.expr('INTERVAL 23 HOURS'))
+                    #_mada_all = _mada_all.withColumn('interval_to_date',  F.from_utc_timestamp(_mada_all.interval_to_date,timezone))
+
+                    #_mada_all = _mada_all.withColumn('interval_to_date', \
+                    #    F.when(((F.date_format(F.col('interval_to_date'), 'HH:mm:ss') != "23:00:00") & (F.date_format(F.col('interval_to_date'),'MM') == "03")),(F.col('interval_to_date') - F.expr('INTERVAL 1 HOURS'))).otherwise(F.col('interval_to_date')))
+
+                    #_mada_all = _mada_all.withColumn('interval_to_date', \
+                    #    F.when(((F.date_format(F.col('interval_to_date'),'HH:mm:ss') != "23:00:00") & ( F.date_format(F.col('interval_to_date'), 'MM') == "11")), ( F.col('interval_to_date') + F.expr('INTERVAL 1 HOURS'))).otherwise(F.col('interval_to_date')))
+
+                    print(_mada_all.filter( (F.col('billstop') - F.expr(interval_frec)).cast('date') == F.col('interval_to_date').cast('date')).count())
+                    print(_mada_all.filter(F.date_format(F.col('interval_to_date'), 'HH:mm:ss') == "23:00:00").count())
+
 
                     _mada_all = _mada_all.withColumn('intdatafirst',  F.lit(intdatafirst))
                     _mada_all = _mada_all.withColumn('intdatasecond', F.lit(intdatasecond))
 
 
                     #pb
+                    try:
+                        if _pb_accounts is not None and isinstance(_pb_accounts, DataFrame):
+                            pb_condition = "1 = 0"
+                            pb_all = _mada_all.join(_pb_accounts.select('premiseid').distinct().hint("broadcast"),["premiseid"], 'inner')
 
-                    #pb_all = mada_p.unionByName(mada_r).unionByName(mada_r_not_nm)
-                    pb_all = _mada_all.join(_pb_accounts.select('accountid').distinct().hint("broadcast"),["accountid"], 'inner')
+                            pb_accounts = pb_all.agg(F.collect_list("accountid").alias('accounts_values'))
+                            pb_accounts = pb_accounts.withColumn("account_list", array_distinct("accounts_values"))
+                            pb_account_list = pb_accounts.select('account_list').collect()[0]
+                            if len(pb_account_list.account_list) != 0:
+                                account_list = ','.join(str(elem) for elem in pb_account_list.account_list)
+                                pb_condition = 'cust_acct_num::bigint in ({})'.format(account_list)
+                    except NameError as error:
+                        print('Mada Gulf')
 
-                    #pb_all = pb_all.withColumn('interval_from_date',F.col("billstart").cast('timestamp')).withColumn('interval_to_date', (pb_all.billstop - F.expr('INTERVAL 1 DAY') ).cast('timestamp') )
-                    #pb_all = pb_all.withColumn('interval_to_date', pb_all.interval_to_date + F.expr('INTERVAL 23 HOURS'))
-                    #pb_all.createOrReplaceTempView('pb_mada')
+                    if company == 'FPL':
 
-                    pb_accounts = pb_all.agg(F.collect_list("accountid").alias('accounts_values'))
-                    pb_accounts = pb_accounts.withColumn("account_list", array_distinct("accounts_values"))
-                    pb_account_list = pb_accounts.select('account_list').collect()[0]
-                    if len(pb_account_list.account_list) != 0:
-                        account_list = ','.join(str(elem) for elem in pb_account_list.account_list)
-                        pb_condition = 'cust_acct_num::bigint in ({})'.format(account_list)
+                        all_mada = _mada_all.repartition(F.col("premiseid"), F.col("accountid"))
+
+                        all_mada.cache()
+                        all_mada_count = all_mada.count()
+                        all_mada.createOrReplaceTempView('inter_mada_all')
+
+                        all_premises = all_mada.agg(F.collect_list("premiseid").alias('premise_values'))
+                        all_premises = all_premises.withColumn("premise_list", array_distinct("premise_values"))
+                        all_premise_list = all_premises.select('premise_list').collect()[0]
+                        premise_all_list = ','.join(str(elem) for elem in all_premise_list.premise_list)
+                        all_meters = all_mada.join(_meters.select('premiseid', 'meterid').distinct().hint("broadcast"),["premiseid"], 'inner')
+                        all_meters = all_meters.agg(F.collect_list("meterid").alias('meterid_values'))
+                        all_meters = all_meters.withColumn("meter_list", array_distinct("meterid_values"))
+                        all_meter_list = all_meters.select('meter_list').collect()[0]
+                        meter_all_list = ','.join(f"'{str(elem)}'" for elem in all_meter_list.meter_list)
+                        # ','.join(f"'{str(elem)}'" for elem in rate_list_nm.rate_list)
+
+                        all_premises_nm = all_mada.filter(F.col('netmeter') == 1).agg(F.collect_list("premiseid").alias('premise_values'))
+                        all_premises_nm = all_premises_nm.withColumn("premise_list", array_distinct("premise_values"))
+                        all_premise_list_nm = all_premises_nm.select('premise_list').collect()[0]
+                        premise_all_list_nm = ','.join(str(elem) for elem in all_premise_list_nm.premise_list)
+                        all_meters_nm = all_mada.filter(F.col('netmeter') == 1).join(_meters.select('premiseid', 'meterid').distinct().hint("broadcast"), ["premiseid"], 'inner')
+                        all_meters_nm = all_meters_nm.agg(F.collect_list("meterid").alias('meterid_values'))
+                        all_meters_nm = all_meters_nm.withColumn("meter_list", array_distinct("meterid_values"))
+                        all_meter_list_nm = all_meters_nm.select('meter_list').collect()[0]
+                        meter_all_list_nm = ','.join(f"'{str(elem)}'" for elem in all_meter_list_nm.meter_list)
+
+                    else:
+
+                        all_mada = _mada_all.repartition(F.col("premiseid"), F.col("accountid"))
+
+                        all_mada.cache()
+                        all_mada_count = all_mada.count()
+                        all_mada.createOrReplaceTempView('inter_mada_all')
+
+                        # meters from _mada_all (use for Gulf)
+                        all_meters = all_mada.join(_meters.select('premiseid','meterid').distinct().hint("broadcast"),["premiseid"], 'inner')
+                        #all_meters = all_meters.withColumn('meterid', F.regexp_replace('meterid', r'^[0]*', ''))
+                        all_meters = all_meters.agg(F.collect_list("meterid").alias('meterid_values'), F.collect_list("premiseid").alias('premise_values'))
+                        all_meters = all_meters.withColumn('company', F.lit(company))
+
+                        all_meters = all_meters.withColumn("premise_list", array_distinct("premise_values"))
+                        all_premise_list = all_meters.select('premise_list').collect()[0]
+                        premise_all_list = ','.join(str(elem) for elem in all_premise_list.premise_list)
+                        all_premise_condition = "CAST(C.ANLAGE AS integer) in ({})".format(premise_all_list)
+                        # all_premise_condition = "CAST(C.ANLAGE AS integer) in (70622019)"
+                        all_ev_condition = 's.site_id in ({})'.format(premise_all_list)
 
 
-
-                    # mass_market _net meters
-                    mm_net_meter_join = mada_p.unionByName(mada_r)
-                    mm_net_meter = _mada_all.join(mm_net_meter_join.select('premiseid').distinct().hint("broadcast"),["premiseid"], 'inner')
-                    mm_net_meter = mm_net_meter.join(_meters.filter(F.col('netmeter') == 1).select('premiseid').distinct().hint("broadcast"), ["premiseid"], 'inner')
-                    mm_net_meter = mm_net_meter.dropDuplicates()
-
-
-                    #mm_net_meter = mm_net_meter.withColumn('interval_from_date',F.col("billstart").cast('timestamp')).withColumn('interval_to_date', (mm_net_meter.billstop - F.expr('INTERVAL 1 DAY') ).cast('timestamp') )
-                    #mm_net_meter = mm_net_meter.withColumn('interval_to_date', mm_net_meter.interval_to_date + F.expr('INTERVAL 23 HOURS'))
-                    #mm_net_meter.cache()
-                    #mm_net_meter_count = mm_net_meter.count()
-                    #mm_net_meter.createOrReplaceTempView('inter_mada')
-
-                    nm_premise = mm_net_meter.agg(F.collect_list("premiseid").alias('premise_values'))
-                    nm_premise = nm_premise.withColumn("premise_list", array_distinct("premise_values"))
-                    nm_premise_list = nm_premise.select('premise_list').collect()[0]
-                    #if len(nm_premise_list.premise_list) != 0:
-                    #    premise_list_nm = ','.join(str(elem) for elem in nm_premise_list.premise_list)
-                    #    nm_condition = 'p.prem_num::int in ({})'.format(premise_list_nm)
-
-
-                    # mass_market not_net meters
-                    mm_not_net_meter_join = mada_p.unionByName(mada_r_not_nm)
-                    mm_not_net_meter = _mada_all.join(mm_not_net_meter_join.select('premiseid').distinct().hint("broadcast"),["premiseid"], 'inner')
-                    mm_not_net_meter = mm_not_net_meter.join(_meters.filter(F.col('netmeter') == 0).select('premiseid').distinct().hint("broadcast"), ["premiseid"],'inner')
-                    mm_not_net_meter = mm_not_net_meter.dropDuplicates()
-
-                    #mm_not_net_meter = mm_not_net_meter.withColumn('interval_from_date',F.col("billstart").cast('timestamp')).withColumn('interval_to_date', (mm_not_net_meter.billstop - F.expr('INTERVAL 1 DAY')).cast('timestamp'))
-                    #mm_not_net_meter = mm_not_net_meter.withColumn('interval_to_date',mm_not_net_meter.interval_to_date + F.expr('INTERVAL 23 HOURS'))
-
-                    #mm_not_net_meter.cache()
-                    #mm_not_net_meter_count = mm_not_net_meter.count()
-                    #mm_not_net_meter.createOrReplaceTempView('inter_mada_not_nm')
-
-                    not_nm_premise = mm_not_net_meter.agg(F.collect_list("premiseid").alias('premise_values'))
-                    not_nm_premise = not_nm_premise.withColumn("premise_list", array_distinct("premise_values"))
-                    not_nm_premise_list = not_nm_premise.select('premise_list').collect()[0]
-                    #if len(not_nm_premise_list.premise_list) != 0:
-                    #    premise_list_nnm = ','.join(str(elem) for elem in not_nm_premise_list.premise_list)
-                    #    not_nm_condition = 'p.prem_num::int in ({})'.format(premise_list_nnm)
+                        all_meters = all_meters.withColumn("meterid_list", array_distinct("meterid_values"))
+                        all_meters_list = all_meters.select('meterid_list').collect()[0]
+                        meters_all_list = ','.join(f"'{str(elem)}'" for elem in all_meters_list.meterid_list)
+                        all_meters_condition = "mtr_id in ({})".format(meters_all_list)
+                        # all_meters_condition = "mtr_id in ('5874021')" #(', '7518177', '7366052','7395147', '5220384', '3886904', '7018350', '5203445', '7364450', '7267496', '3695004', '5738036', '3989775',
 
 
                     # all
@@ -660,6 +1043,7 @@ def to_process(spark,  process_step, process_run_date, job_run_id, region_name, 
                     _start = _mada_all.agg({"billstart": "min"}).collect()[0]
                     _bill_end = _mada_all.agg({"bill_date": "max"}).collect()[0]
                     _bill_start = _mada_all.agg({"bill_date": "min"}).collect()[0]
+                    _mada_all.unpersist()
 
                     fecth_to_date = _end[0].strftime('%Y-%m-%d')
                     fecth_from_date = _start[0].strftime('%Y-%m-%d')
@@ -688,6 +1072,8 @@ def to_process(spark,  process_step, process_run_date, job_run_id, region_name, 
 
 
                 if item['temp_dataframe'] == 'meters':
+                    for col in df.columns:
+                        df = df.withColumnRenamed(col, col.lower())
                     _meters = df
                     _meters = _meters.repartition(F.col("premiseid"))
                     _meters.cache()
@@ -704,184 +1090,277 @@ def to_process(spark,  process_step, process_run_date, job_run_id, region_name, 
 
                     pb_all = pb_all.join(_meters_pb.select('premiseid').distinct().hint("broadcast"), ["premiseid"],'inner')
 
-                    all_mada = mm_net_meter.unionByName(mm_not_net_meter).unionByName(pb_all)
-                    all_mada = all_mada.dropDuplicates()
-
-
-                    #all_mada.write.mode("overwrite").bucketBy(500, "premiseid").sortBy('billstop').saveAsTable(mada_table_name, format='parquet')
-                    #all_mada = spark.read.table(mada_table_name)
-                    all_mada = all_mada.repartition(F.col("premiseid"), F.col("accountid"))
-                    all_mada.cache()
-                    all_mada_count = all_mada.count()
-                    all_mada.createOrReplaceTempView('inter_mada_all')
-
-
-                    pb_premise = pb_all.agg(F.collect_list("premiseid").alias('premise_values'))
-                    pb_premise = pb_premise.withColumn("premise_list", array_distinct("premise_values"))
-                    pb_premise_list = pb_premise.select('premise_list').collect()[0]
-
-
-                    premise_all_ = list(set().union(pb_premise_list.premise_list, nm_premise_list.premise_list,not_nm_premise_list.premise_list ))
-                    premise_all_list = ','.join(str(elem) for elem in premise_all_)
-                    all_premise_condition = 'prem_num::int in ({})'.format(premise_all_list)
-                   
+                    if premise_all_list:
+                        all_premise_condition = 'prem_num::int in ({})'.format(premise_all_list)
+                        all_ev_condition = 's.site_id in ({})'.format(premise_all_list)
+                        all_meter_condition = 'ami_dvc_name in ({})'.format(meter_all_list)
+                    else:
+                        all_premise_condition = 'prem_num::int in (null)'
+                        all_ev_condition = 's.site_id in (null)'
+                        all_meter_condition = 'ami_dvc_name in (null)'
+                    if premise_all_list_nm:
+                        all_premise_condition_nm = 'prem_num::int in ({})'.format(premise_all_list_nm)
+                        all_ev_condition_nm = 's.site_id in ({})'.format(premise_all_list_nm)
+                        all_meter_condition_nm = 'ami_dvc_name in ({})'.format(meter_all_list_nm)
+                    else:
+                        all_premise_condition_nm = 'prem_num::int in (null)'
+                        all_ev_condition_nm = 's.site_id in (null)'
+                        all_meter_condition_nm = 'ami_dvc_name in (null)'
+                    # all_premise_condition = 'prem_num::int = 213565'
 
                     _mada.unpersist()
 
 
                 if item['temp_dataframe'] == 'mass_market_nm':
-                    df_nm = df.withColumn('read_date', to_date(F.col('read_strt_time'), 'yyyy-MM-dd'))
-                    df_nm = df_nm.dropDuplicates()
 
-                    df_nm.createOrReplaceTempView('mass_market')
+                    try:
+                        spark.conf.set("spark.sql.legacy.timeParserPolicy", "LEGACY")
+                        df_nm = df.withColumn('read_date', to_date(F.col('read_strt_time'), 'yyyy-MM-dd'))
+                        df.unpersist()
+                        df_nm = df_nm.withColumn('premiseid', F.col("premiseid").cast('string'))
+                        df_nm = df_nm.withColumn('read_strt_time', F.col("read_strt_time").cast('timestamp'))
+                        df_nm = df_nm.dropDuplicates()
+                        df_nm.cache()
 
-                    sql = "Select m.premiseid, m.accountid,   m.meterid, billstart, billstop, read_date, read_strt_time, round(kwh,4) as kwh, channel, uom, spi, interval_from_date, interval_to_date, m.metertype, metermtpl, meterstart , meterstop, netmeter, intdatafirst, intdatasecond  from mass_market m \
-                                       inner join inter_mada_all i on i.premiseid= m.premiseid and i.accountid = m.accountid  \
-                                       inner join meters me on netmeter = 1 and me.premiseid = m.premiseid and m.meterid = me.meterid and m.metertype= me.metertype  and  read_date between meterstart and  meterstop where read_date >=  billstart and read_date < billstop"
+                        df_nm.createOrReplaceTempView('mass_market')
+                        df_nm.unpersist()
 
-                    #sql = "Select m.premiseid, m.accountid,   m.meterid, billstart, billstop, read_date, read_strt_time, round(kwh,4) as kwh, channel, uom, spi, interval_from_date, interval_to_date, m.metertype, metermtpl, meterstart , meterstop, netmeter  from mass_market m \
-                    #inner join inter_mada i on i.premiseid= m.premiseid  \
-                    #inner join meters me on me.premiseid = m.premiseid and m.meterid = me.meterid  and  read_date between meterstart and  meterstop where read_date >=  billstart and read_date < billstop"
+                        sql = "Select m.premiseid, i.uev_site, i.accountid,   m.meterid, billstart, billstop, read_date, read_strt_time, round(kwh,4) as kwh, channel, uom, spi, interval_from_date, interval_to_date, m.metertype, metermtpl, meterstart , meterstop, netmeter, intdatafirst, intdatasecond  from mass_market m \
+                                           inner join inter_mada_all i on i.uev_site = m.premiseid and netmeter = 1 and read_date >=  billstart and read_date < billstop \
+                                           inner join meters me on   me.premiseid = m.premiseid and m.meterid = me.meterid and m.metertype= me.metertype  and  read_date between meterstart and  meterstop where read_date >=  billstart and read_date < billstop"
 
-                    _mass_market = spark.sql(sql)
-                    _mass_market = _mass_market.repartition(F.col("premiseid"), F.col("accountid"))
-                    _mass_market.cache()
-                    _mass_market_count = _mass_market.count()
+                        # sql = "Select i.premiseid, i.uev_site, i.accountid,   m.meterid, billstart, billstop, read_date, read_strt_time, round(kwh*metermtpl,4) as kwh, channel, uom, spi, interval_from_date, interval_to_date, me.metertype, metermtpl, meterstart , meterstop, netmeter, intdatafirst, intdatasecond  from mass_market m \
+                        #                    inner join inter_mada_all i on i.uev_site = m.premiseid and netmeter = 1 and read_date >=  billstart and read_date < billstop \
+                        #                    inner join meters me on m.meterid = me.meterid and m.metertype= me.metertype  and  read_date between meterstart and  meterstop where read_date >=  billstart and read_date < billstop"
 
-                    _mass_market = _mass_market.withColumn('meterstart', F.col("meterstart").cast('timestamp'))
-                    _mass_market = _mass_market.withColumn('meterstop', F.col("meterstop").cast('timestamp'))
+                        #inner join inter_mada_all i on i.premiseid = m.premiseid and i.accountid = m.accountid and netmeter = 1 \ read_date >= billstart and read_date < billstop \
 
-                    _mass_market = _mass_market.withColumn("interval_to_date", (F.unix_timestamp("interval_to_date") + ((60 - F.col('spi')) * 60)).cast('timestamp'))
+                        #sql = "Select m.premiseid, m.accountid,   m.meterid, billstart, billstop, read_date, read_strt_time, round(kwh,4) as kwh, channel, uom, spi, interval_from_date, interval_to_date, m.metertype, metermtpl, meterstart , meterstop, netmeter  from mass_market m \
+                        #inner join inter_mada i on i.premiseid= m.premiseid  \
+                        #inner join meters me on me.premiseid = m.premiseid and m.meterid = me.meterid  and  read_date between meterstart and  meterstop where read_date >=  billstart and read_date < billstop"
 
-                    _mass_market_nm = interpolation_fill(_mass_market, ['premiseid', 'accountid','meterid','channel','metertype', 'metermtpl', 'meterstart' , 'meterstop', 'netmeter','billstart', 'billstop'], 'read_strt_time', ['kwh'], intdatafirst, intdatasecond)
-
-
-                    # add channel 9
-                    window_lag = Window.partitionBy(['premiseid', 'accountid', 'meterid','read_time',  'billstart',  'billstop']).orderBy("channel")
-                    _mass_market_9 = _mass_market_nm.withColumn("Kwh_Lag", (F.lag(F.col('kwh')).over(window_lag) - F.col('kwh'))) \
-                            .withColumn("row_number",F.row_number().over(window_lag))
-                    _mass_market_9 = _mass_market_9.filter(F.col('row_number') == 2 )
-                    _mass_market_9 = _mass_market_9.withColumn("Kwh",  F.col('Kwh_Lag')).withColumn("channel", F.lit(9))
-                    #_mass_market_9 = _mass_market_9.withColumn("Kwh", F.when(F.col('Kwh_Lag') >= 0, F.col('Kwh_Lag')).otherwise(F.lit(0))) \
-                    #    .withColumn("channel", F.lit(9))
-                    drop_columns = ['row_number', 'Kwh_Lag']
-                    _mass_market_9 = _mass_market_9.drop(*drop_columns)
-
-                    _mass_market_nm =_mass_market_nm.unionByName(_mass_market_9)
-                    _mass_market_nm.createOrReplaceTempView('mass_market')
-
-                    sql_interval ="Select  mn.premiseid , mn.accountid, billstart,  billstop, metertype, COALESCE(read_strt_time, read_time ) as read_strt_time , kwh, mn.meterid, mn.channel, uom, COALESCE(spi,spi_agg)*60 as spi, status, COALESCE(spi,spi_agg) as spi_min, cast(read_time as date) as date_read_time, \
-                    sum(CASE WHEN status=9 then 1 else 0 end)  OVER(PARTITION BY mn.premiseid , mn.accountid, billstart,  billstop, mn.meterid, mn.channel, cast(read_time as date)) as bad, \
-                    sum(CASE WHEN status is null  then 1 else 0 end)  OVER(PARTITION BY mn.premiseid , mn.accountid, billstart,  billstop, mn.meterid, mn.channel, cast(read_time as date)) as good, \
-                    sum(CASE WHEN status='I' then 1 else 0 end)  OVER(PARTITION BY mn.premiseid , mn.accountid, billstart,  billstop, mn.meterid, mn.channel, cast(read_time as date)) as interpolated , \
-                    metermtpl, meterstart , meterstop, netmeter \
-                    from mass_market mn "
-
-                    interval_data_nm = spark.sql(sql_interval)
-                    interval_data_nm.cache()
-                    interval_data_count = interval_data_nm.count()
-
-                    lse = interval_data_nm.select('premiseid' , 'accountid' , 'metertype', 'metermtpl' , 'read_strt_time' , 'kwh' , 'meterid' , 'channel' , 'uom' , 'spi' , 'status')
-
-                    interval_agg_nm = interval_data_nm.groupBy('premiseid', 'accountid', 'billstart',  'billstop', 'metertype', 'meterid', 'channel', 'spi_min', 'date_read_time', 'metermtpl', 'meterstart' , 'meterstop', 'netmeter') \
-                        .agg(
-                        F.sum(F.col("kwh")).alias('kwh'),
-                        F.sum(F.when(F.col('status') == 9, F.lit(1)).otherwise(F.lit(0))).alias('badintvper'),
-                        F.sum(F.when(F.col('status').isNull(), F.lit(1)).otherwise(F.lit(0))).alias('goodintvper'),
-                        F.sum(F.when(F.col('status') == 'I', F.lit(1)).otherwise(F.lit(0))).alias('interpolated')
-                    )
-
-                    interval_agg_nm.createOrReplaceTempView('interval_data_nm')
-
-                    sql_agg = "select  premiseid,  meterid, channel,  accountid, billstart,  billstop, metertype,  metermtpl, meterstart as meterstart_dt, meterstop as meterstop_dt, netmeter, goodintvper as goodintvcount , badintvper as badintvcount, interpolated ,  spi_check, kwh, spi \
-                    from  (select mn.premiseid, mn.accountid, billstart,  billstop, meterid, channel, metertype, metermtpl, meterstart, meterstop, netmeter, min(spi_min) as spi,  count(distinct spi_min) as spi_check, sum(kwh) as kwh , sum(badintvper) as badintvper, sum(goodintvper) as goodintvper, sum(interpolated) as interpolated \
-                    from interval_data_nm  mn  \
-                    inner join (Select  premiseid,  min(meterstart) as min_meterstart, max(meterstop) as max_meterstop from meters where netmeter = 1 group by 1) m on m.premiseid = mn.premiseid  and (date_read_time between m.min_meterstart and m.max_meterstop) \
-                    group by 1,2,3,4,5,6,7,8,9, 10, 11)"
+                        _mass_market = spark.sql(sql)
+                        _mass_market = _mass_market.repartition(F.col("premiseid"), F.col("accountid"))
+                        _mass_market.cache()
+                        _mass_market_count = _mass_market.count()
 
 
-                    nm_mass_market_nm = spark.sql(sql_agg)
-                    nm_mass_market_nm = nm_mass_market_nm.dropDuplicates()
+                        # spi_change
+                        window_spi = Window.partitionBy(['premiseid', 'uev_site', 'accountid', 'meterid', 'billstart', 'billstop'])
+                        _mass_market = _mass_market.withColumn("spi_max", (F.max(F.col('spi')).over(window_spi)))
 
-                    window_lag_9 = Window.partitionBy(['premiseid', 'accountid', 'meterid',  'billstart',  'billstop']).orderBy("channel")
-                    nm_mass_market_nm = nm_mass_market_nm.withColumn("Kwh_Lag",(F.lag(F.col('kwh'),2).over(window_lag_9) - F.lag(F.col('kwh')).over(window_lag_9)))
+                        _mass_market = _mass_market.withColumn("read_hour",F.date_trunc('hour', F.col('read_strt_time')))
 
-                    nm_mass_market_nm = nm_mass_market_nm.withColumn("Kwh", F.expr(" CASE WHEN (channel = 9 and Kwh_Lag >= 0) then Kwh_Lag WHEN (channel = 9 and Kwh_Lag < 0)  then 0 else Kwh end"))
+                        _mass_market = _mass_market.withColumn("read_strt_time_agg",
+                                            F.when((F.col('spi_max') == F.col('spi')), F.unix_timestamp(F.col('read_strt_time'))).otherwise(
+                                            F.unix_timestamp(F.col("read_hour")) + ((60 - F.col('spi_max')) * 60)).cast('timestamp'))
 
-                    drop_columns = ['Kwh_Lag']
-                    nm_mass_market_nm = nm_mass_market_nm.drop(*drop_columns)
-                    nm_mass_market_nm.cache()
-                    nm_mass_market_nm_count = nm_mass_market_nm.count()
+                        columns_agg = ['premiseid', 'uev_site', 'accountid', 'billstart', 'billstop', 'meterid', 'read_date', 'channel',
+                                       'uom', 'spi_max', 'interval_from_date', 'interval_to_date', 'metertype', 'metermtpl',
+                                       'netmeter', 'meterstart', 'meterstop', 'intdatafirst', 'intdatasecond','read_strt_time_agg']
 
-                    df_nm.unpersist()
-                    _mass_market.unpersist()
-                    interval_data_nm.unpersist()
+                        _mass_market = _mass_market.groupBy(columns_agg).agg(F.sum("kwh").alias('kwh'), F.approx_count_distinct("spi").alias('spi_count'))
+
+                        _mass_market = _mass_market.withColumnRenamed('spi_max', 'spi').withColumnRenamed('read_strt_time_agg', 'read_strt_time')
+                        # spi change
+
+                        _mass_market = _mass_market.withColumn('meterstart', F.col("meterstart").cast('timestamp'))
+                        _mass_market = _mass_market.withColumn('meterstop', F.col("meterstop").cast('timestamp'))
+
+                        _mass_market = _mass_market.withColumn("interval_to_date", (F.unix_timestamp("interval_to_date") + ((60 - F.col('spi')) * 60)).cast('timestamp'))
+
+                        _mass_market_nm = interpolation_fill(_mass_market, ['premiseid', 'uev_site', 'accountid','meterid','channel','metertype', 'spi', 'metermtpl', 'meterstart' , 'meterstop', 'netmeter','billstart', 'billstop'], 'read_strt_time', ['kwh'], intdatafirst, intdatasecond)
 
 
+                        # add channel 9
+                        window_lag = Window.partitionBy(['premiseid','accountid', 'meterid','read_time',  'billstart',  'billstop']).orderBy("channel")
+                        _mass_market_9 = _mass_market_nm.withColumn("Kwh_Lag", (F.lag(F.col('kwh')).over(window_lag) - F.col('kwh'))) \
+                                .withColumn("row_number",F.row_number().over(window_lag))
+                        _mass_market_9 = _mass_market_9.filter(F.col('row_number') == 2 )
+                        _mass_market_9 = _mass_market_9.withColumn("Kwh",  F.col('Kwh_Lag')).withColumn("channel", F.lit(9))
+                        #_mass_market_9 = _mass_market_9.withColumn("Kwh", F.when(F.col('Kwh_Lag') >= 0, F.col('Kwh_Lag')).otherwise(F.lit(0))) \
+                        #    .withColumn("channel", F.lit(9))
+                        drop_columns = ['row_number', 'Kwh_Lag']
+                        _mass_market_9 = _mass_market_9.drop(*drop_columns)
+
+                        _mass_market_nm =_mass_market_nm.unionByName(_mass_market_9)
+                        _mass_market_nm.createOrReplaceTempView('mass_market')
+
+                        sql_interval ="Select  mn.premiseid , mn.accountid, billstart,  billstop, metertype, COALESCE(read_strt_time, read_time ) as read_strt_time , kwh, mn.meterid, mn.channel, uom, COALESCE(spi,spi_agg)*60 as spi, status, COALESCE(spi,spi_agg) as spi_min, cast(read_time as date) as date_read_time, \
+                        sum(CASE WHEN status=9 then 1 else 0 end)  OVER(PARTITION BY mn.premiseid , mn.accountid, billstart,  billstop, mn.meterid, mn.channel, cast(read_time as date)) as bad, \
+                        sum(CASE WHEN status is null  then 1 else 0 end)  OVER(PARTITION BY mn.premiseid , mn.accountid, billstart,  billstop, mn.meterid, mn.channel, cast(read_time as date)) as good, \
+                        sum(CASE WHEN status='I' then 1 else 0 end)  OVER(PARTITION BY mn.premiseid , mn.accountid, billstart,  billstop, mn.meterid, mn.channel, cast(read_time as date)) as interpolated , \
+                        metermtpl, meterstart , meterstop, netmeter , COALESCE(spi_count, 0 ) as spi_count \
+                        from mass_market mn "
+
+                        interval_data_nm = spark.sql(sql_interval)
+                        interval_data_nm.cache()
+                        interval_data_count = interval_data_nm.count()
+
+                        lse = interval_data_nm.select('premiseid' , 'accountid' , 'metertype', 'metermtpl' , 'read_strt_time' , 'kwh' , 'meterid' , 'channel' , 'uom' , 'spi' , 'status')
+                        lse.cache()
+                        lse_count = lse.count()
+
+                        interval_agg_nm = interval_data_nm.groupBy('premiseid', 'accountid', 'billstart',  'billstop', 'metertype', 'meterid', 'channel', 'spi_min', 'date_read_time', 'metermtpl', 'meterstart' , 'meterstop', 'netmeter') \
+                            .agg(
+                            F.sum(F.col("kwh")).alias('kwh'), F.max(F.col('spi_count')).alias('spi_count'),
+                            F.sum(F.when(F.col('status') == 9, F.lit(1)).otherwise(F.lit(0))).alias('badintvper'),
+                            F.sum(F.when(F.col('status').isNull(), F.lit(1)).otherwise(F.lit(0))).alias('goodintvper'),
+                            F.sum(F.when(F.col('status') == 'I', F.lit(1)).otherwise(F.lit(0))).alias('interpolated')
+                        )
+
+                        interval_agg_nm.createOrReplaceTempView('interval_data_nm')
+
+                        sql_agg = "select  premiseid,  meterid, channel,  accountid, billstart,  billstop, metertype,  metermtpl, meterstart as meterstart_dt, meterstop as meterstop_dt, netmeter, goodintvper as goodintvcount , badintvper as badintvcount, interpolated ,  spi_check, kwh, spi \
+                        from  (select mn.premiseid, mn.accountid, billstart,  billstop, meterid, channel, metertype, metermtpl, meterstart, meterstop, netmeter, min(spi_min) as spi,  max(spi_count) as spi_check, sum(kwh) as kwh , sum(badintvper) as badintvper, sum(goodintvper) as goodintvper, sum(interpolated) as interpolated \
+                        from interval_data_nm  mn  \
+                        inner join (Select  premiseid,  min(meterstart) as min_meterstart, max(meterstop) as max_meterstop from meters  group by 1) m on m.premiseid = mn.premiseid  and (date_read_time between m.min_meterstart and m.max_meterstop) \
+                        where  netmeter = 1 group by 1,2,3,4,5,6,7,8,9, 10, 11)"
+
+
+                        nm_mass_market_nm = spark.sql(sql_agg)
+                        nm_mass_market_nm = nm_mass_market_nm.dropDuplicates()
+
+                        window_lag_9 = Window.partitionBy(['premiseid', 'accountid', 'meterid',  'billstart',  'billstop']).orderBy("channel")
+                        nm_mass_market_nm = nm_mass_market_nm.withColumn("Kwh_Lag",(F.lag(F.col('kwh'),2).over(window_lag_9) - F.lag(F.col('kwh')).over(window_lag_9)))
+
+                        nm_mass_market_nm = nm_mass_market_nm.withColumn("Kwh", F.expr(" CASE WHEN (channel = 9 and Kwh_Lag >= 0) then Kwh_Lag WHEN (channel = 9 and Kwh_Lag < 0)  then 0 else Kwh end"))
+
+                        drop_columns = ['Kwh_Lag']
+                        nm_mass_market_nm = nm_mass_market_nm.drop(*drop_columns)
+                        nm_mass_market_nm.cache()
+                        nm_mass_market_nm_count = nm_mass_market_nm.count()
+
+                        _mass_market.unpersist()
+                        interval_data_nm.unpersist()
+                        spark.catalog.dropTempView('mass_market')
+
+                    finally:
+                        # ALWAYS RESTORE ORIGINAL SETTING (even if error occurs)
+                        spark.conf.set("spark.sql.legacy.timeParserPolicy", original_policy)
+                        print(f"Restored timeParserPolicy to: {original_policy}")
 
 
                 if item['temp_dataframe'] == 'mass_market_not_nm':
 
-                    df_not_nm = df.withColumn('read_date', to_date(F.col('read_strt_time'), 'yyyy-MM-dd'))
-                    df_not_nm = df_not_nm.dropDuplicates()
+                    try:
+                        spark.conf.set("spark.sql.legacy.timeParserPolicy", "LEGACY")
+                        df_not_nm = df.withColumn('read_date', to_date(F.col('read_strt_time'), 'yyyy-MM-dd'))
+                        df.unpersist()
+                        df_not_nm = df_not_nm.withColumn('premiseid', F.col("premiseid").cast('string'))
+                        df_not_nm = df_not_nm.withColumn('read_strt_time', F.col("read_strt_time").cast('timestamp'))
+                        df_not_nm = df_not_nm.dropDuplicates()
 
-                    df_not_nm.createOrReplaceTempView('mass_market_not_nm')
+                        df_not_nm.cache()
+                        dfnm_count = df_not_nm.count()
 
-                    #sql = "Select m.premiseid, m.accountid, billstart, billstop, m.meterid, read_date, read_strt_time, round(kwh,4) as kwh, channel, uom, spi, interval_from_date, interval_to_date, m.metertype, metermtpl, meterstart , meterstop, netmeter  from mass_market_not_nm m inner join inter_mada_not_nm i on i.premiseid= m.premiseid  inner join meters me on me.premiseid = m.premiseid  and m.meterid = me.meterid  and  read_date between meterstart and  meterstop where read_date >=  billstart and read_date < billstop"
+                        df_not_nm.createOrReplaceTempView('mass_market_not_nm')
+                        df_not_nm.unpersist()
 
-                    sql = "Select m.premiseid, m.accountid, billstart, billstop, m.meterid, read_date, read_strt_time, round(kwh,4) as kwh, channel, uom, spi, interval_from_date, interval_to_date, m.metertype, metermtpl, meterstart , meterstop, netmeter , intdatafirst, intdatasecond  \
-                    from mass_market_not_nm m \
-                    inner join inter_mada_all i on i.premiseid= m.premiseid and i.accountid = m.accountid \
-                    inner join meters me on netmeter = 0 and me.premiseid = m.premiseid  and m.meterid = me.meterid and m.metertype= me.metertype and  read_date between meterstart and  meterstop where read_date >=  billstart and read_date < billstop"
+                        #sql = "Select m.premiseid, m.accountid, billstart, billstop, m.meterid, read_date, read_strt_time, round(kwh,4) as kwh, channel, uom, spi, interval_from_date, interval_to_date, m.metertype, metermtpl, meterstart , meterstop, netmeter  from mass_market_not_nm m inner join inter_mada_not_nm i on i.premiseid= m.premiseid  inner join meters me on me.premiseid = m.premiseid  and m.meterid = me.meterid  and  read_date between meterstart and  meterstop where read_date >=  billstart and read_date < billstop"
 
-                    _mass_market_not_nm = spark.sql(sql)
-                    _mass_market_not_nm = _mass_market_not_nm.repartition(F.col("premiseid"), F.col("accountid"))
-                    _mass_market_not_nm.cache()
-                    _mass_market_not_nm_count = _mass_market_not_nm.count()
-                    #_mass_market_not_nm = _mass_market_not_nm.filter((F.col('premiseid') == 549314120))
+                        sql = "Select i.premiseid, i.uev_site, i.accountid, billstart, billstop, m.meterid, read_date, read_strt_time, round(kwh,4) as kwh, channel, uom, spi, interval_from_date, interval_to_date, m.metertype, metermtpl, meterstart , meterstop, netmeter , intdatafirst, intdatasecond  \
+                        from mass_market_not_nm m \
+                        inner join inter_mada_all i on i.uev_site = m.premiseid and read_date >=  billstart and read_date < billstop \
+                        inner join meters me on   me.premiseid = m.premiseid  and m.meterid = me.meterid and m.metertype= me.metertype and  read_date between meterstart and  meterstop where read_date >=  billstart and read_date < billstop"
 
-                    _mass_market_not_nm = _mass_market_not_nm.withColumn('meterstart', F.col("meterstart").cast('timestamp'))
-                    _mass_market_not_nm = _mass_market_not_nm.withColumn('meterstop', F.col("meterstop").cast('timestamp'))
-                    _mass_market_not_nm = _mass_market_not_nm.withColumn("interval_to_date", (F.unix_timestamp("interval_to_date") + ((60 - F.col('spi')) * 60)).cast('timestamp'))
+                        # sql = "Select i.premiseid, i.uev_site, i.accountid, billstart, billstop, m.meterid, read_date, read_strt_time, round(kwh*metermtpl,4) as kwh, channel, uom, spi, interval_from_date, interval_to_date, me.metertype, metermtpl, meterstart , meterstop, netmeter , intdatafirst, intdatasecond  \
+                        # from mass_market_not_nm m \
+                        # inner join inter_mada_all i on i.uev_site = m.premiseid and netmeter = 0 and read_date >=  billstart and read_date < billstop \
+                        # inner join meters me on m.meterid = me.meterid and m.metertype= me.metertype and  read_date between meterstart and  meterstop where read_date >=  billstart and read_date < billstop"
 
-                    _mass_market_not_nm = interpolation_fill(_mass_market_not_nm, ['premiseid', 'accountid','meterid','channel','metertype', 'metermtpl', 'meterstart' , 'meterstop', 'netmeter', 'billstart', 'billstop'], 'read_strt_time', ['kwh'], intdatafirst, intdatasecond)
-                    _mass_market_not_nm.createOrReplaceTempView('mass_market_not_nm')
+                        _mass_market_not_nm = spark.sql(sql)
+                        _mass_market_not_nm = _mass_market_not_nm.repartition(F.col("premiseid"), F.col("accountid"))
+                        _mass_market_not_nm.cache()
+                        _mass_market_not_nm_count = _mass_market_not_nm.count()
+                        #_mass_market_not_nm = _mass_market_not_nm.filter((F.col('premiseid') == 549314120))
 
+                        # spi_change
+                        window_spi = Window.partitionBy(['premiseid', 'uev_site', 'accountid', 'meterid', 'billstart', 'billstop'])
+                        _mass_market_not_nm = _mass_market_not_nm.withColumn("spi_max", (F.max(F.col('spi')).over(window_spi)))
 
-                    sql_interval ="Select  mn.premiseid , mn.accountid, billstart,  billstop, metertype, COALESCE(read_strt_time, read_time ) as read_strt_time , kwh, mn.meterid, mn.channel, uom, COALESCE(spi,spi_agg)*60 as spi, status, COALESCE(spi,spi_agg) as spi_min, cast(read_time as date) as date_read_time, \
-                    sum(CASE WHEN status=9 then 1 else 0 end)  OVER(PARTITION BY mn.premiseid , mn.accountid, billstart,  billstop, mn.meterid, mn.channel, cast(read_time as date)) as bad, \
-                    sum(CASE WHEN status is null  then 1 else 0 end)  OVER(PARTITION BY mn.premiseid , mn.accountid, billstart,  billstop, mn.meterid, mn.channel, cast(read_time as date)) as good, \
-                    sum(CASE WHEN status='I' then 1 else 0 end)  OVER(PARTITION BY mn.premiseid , mn.accountid, billstart,  billstop, mn.meterid, mn.channel, cast(read_time as date)) as interpolated, \
-                    metermtpl, meterstart , meterstop, netmeter \
-                    from mass_market_not_nm mn "
-                    interval_data_not_nm = spark.sql(sql_interval)
+                        _mass_market_not_nm = _mass_market_not_nm.withColumn("read_hour",F.date_trunc('hour', F.col('read_strt_time')))
 
-                    interval_data_not_nm.cache()
-                    interval_data_count = interval_data_not_nm.count()
-                    lse_not_nm = interval_data_not_nm.select('premiseid' , 'accountid' , 'metertype', 'metermtpl' , 'read_strt_time' , 'kwh' , 'meterid' , 'channel' , 'uom' , 'spi' , 'status')
+                        _mass_market_not_nm = _mass_market_not_nm.withColumn("read_strt_time_agg",
+                                            F.when((F.col('spi_max') == F.col('spi')), F.unix_timestamp(F.col('read_strt_time'))).otherwise(
+                                            F.unix_timestamp(F.col("read_hour")) + ((60 - F.col('spi_max')) * 60)).cast('timestamp'))
 
+                        columns_agg = ['premiseid', 'uev_site', 'accountid', 'billstart', 'billstop', 'meterid', 'read_date', 'channel',
+                                       'uom', 'spi_max', 'interval_from_date', 'interval_to_date', 'metertype', 'metermtpl',
+                                       'netmeter', 'meterstart', 'meterstop', 'intdatafirst', 'intdatasecond','read_strt_time_agg']
 
-                    interval_agg_not_nm = interval_data_not_nm.groupBy('premiseid', 'accountid', 'billstart',  'billstop', 'metertype', 'meterid', 'channel', 'spi_min', 'date_read_time', 'metermtpl', 'meterstart' , 'meterstop', 'netmeter') \
-                        .agg(
-                        F.sum(F.col("kwh")).alias('kwh'),
-                        F.sum(F.when(F.col('status') == 9, F.lit(1)).otherwise(F.lit(0))).alias('badintvper'),
-                        F.sum(F.when(F.col('status').isNull(), F.lit(1)).otherwise(F.lit(0))).alias('goodintvper'),
-                        F.sum(F.when(F.col('status') == 'I', F.lit(1)).otherwise(F.lit(0))).alias('interpolated'))
+                        _mass_market_not_nm = _mass_market_not_nm.groupBy(columns_agg).agg(F.sum("kwh").alias('kwh'), F.approx_count_distinct("spi").alias('spi_count'))
 
-                    interval_agg_not_nm.createOrReplaceTempView('interval_data_not_nm')
-
-                    #inter_mada_not_nm
-
-                    sql_agg = "select  premiseid,  meterid, channel,  accountid, billstart,  billstop, metertype,  metermtpl, meterstart as meterstart_dt, meterstop as meterstop_dt, netmeter, goodintvper as goodintvcount , badintvper as badintvcount, interpolated, spi_check, kwh, spi \
-                    from  (select mn.premiseid, mn.accountid, billstart,  billstop, meterid, channel, metertype, metermtpl, meterstart, meterstop, netmeter, min(spi_min) as spi,  count(distinct spi_min) as spi_check, sum(kwh) as kwh , sum(badintvper) as badintvper, sum(goodintvper) as goodintvper, sum(interpolated) as interpolated \
-                    from interval_data_not_nm  mn  \
-                    inner join (Select  premiseid,  min(meterstart) as min_meterstart, max(meterstop) as max_meterstop from meters where netmeter = 0 group by 1) m on m.premiseid = mn.premiseid  and (date_read_time between m.min_meterstart and m.max_meterstop) \
-                    group by 1,2,3,4,5,6,7,8,9, 10,11)"
-
-                    not_nm_mass_market = spark.sql(sql_agg)
-                    not_nm_mass_market = not_nm_mass_market.dropDuplicates()
+                        _mass_market_not_nm = _mass_market_not_nm.withColumnRenamed('spi_max', 'spi').withColumnRenamed('read_strt_time_agg', 'read_strt_time')
+                        # spi change
 
 
+
+                        _mass_market_not_nm = _mass_market_not_nm.withColumn('meterstart', F.col("meterstart").cast('timestamp'))
+                        _mass_market_not_nm = _mass_market_not_nm.withColumn('meterstop', F.col("meterstop").cast('timestamp'))
+                        _mass_market_not_nm = _mass_market_not_nm.withColumn("interval_to_date", (F.unix_timestamp("interval_to_date") + ((60 - F.col('spi')) * 60)).cast('timestamp'))
+
+                        _mass_market_not_nm = interpolation_fill(_mass_market_not_nm, ['premiseid', 'uev_site', 'accountid','meterid','channel','metertype', 'spi', 'metermtpl', 'meterstart' , 'meterstop', 'netmeter', 'billstart', 'billstop'], 'read_strt_time', ['kwh'], intdatafirst, intdatasecond)
+                        _mass_market_not_nm.createOrReplaceTempView('mass_market_not_nm')
+                        _mass_market_not_nm.unpersist()
+
+
+                        sql_interval ="Select  mn.premiseid , uev_site, mn.accountid, billstart,  billstop, metertype, COALESCE(read_strt_time, read_time ) as read_strt_time , kwh, mn.meterid, mn.channel, uom, COALESCE(spi,spi_agg)*60 as spi, status, COALESCE(spi,spi_agg) as spi_min, cast(read_time as date) as date_read_time, \
+                        sum(CASE WHEN status=9 then 1 else 0 end)  OVER(PARTITION BY mn.premiseid , mn.accountid, billstart,  billstop, mn.meterid, mn.channel, cast(read_time as date)) as bad, \
+                        sum(CASE WHEN status is null  then 1 else 0 end)  OVER(PARTITION BY mn.premiseid , mn.accountid, billstart,  billstop, mn.meterid, mn.channel, cast(read_time as date)) as good, \
+                        sum(CASE WHEN status='I' then 1 else 0 end)  OVER(PARTITION BY mn.premiseid , mn.accountid, billstart,  billstop, mn.meterid, mn.channel, cast(read_time as date)) as interpolated, \
+                        metermtpl, meterstart , meterstop, netmeter , COALESCE(spi_count, 0 ) as spi_count \
+                        from mass_market_not_nm mn "
+                        interval_data_not_nm = spark.sql(sql_interval)
+
+                        interval_data_not_nm.cache()
+                        interval_data_count = interval_data_not_nm.count()
+                        lse_not_nm = interval_data_not_nm.select('premiseid', 'accountid' , 'metertype', 'metermtpl' , 'read_strt_time' , 'kwh' , 'meterid' , 'channel' , 'uom' , 'spi' , 'status')
+                        lse_not_nm.cache()
+                        lse_not_nm_count = lse_not_nm.count()
+
+                        nw_uev_lse = lse_not_nm.filter(F.col('premiseid').isin(nw_premise_list))
+                        lse_not_nm = lse_not_nm.filter(~(F.col('premiseid').isin(nw_premise_list)))
+                        lse_not_nm.cache()
+                        lse_not_count = lse_not_nm.count()
+                        print(lse_not_count)
+
+                        interval_agg_not_nm = interval_data_not_nm.groupBy('premiseid', 'uev_site', 'accountid', 'billstart',  'billstop', 'metertype', 'meterid', 'channel', 'spi_min', 'date_read_time', 'metermtpl', 'meterstart' , 'meterstop', 'netmeter') \
+                            .agg(
+                            F.sum(F.col("kwh")).alias('kwh'), F.max(F.col('spi_count')).alias('spi_count'),
+                            F.sum(F.when(F.col('status') == 9, F.lit(1)).otherwise(F.lit(0))).alias('badintvper'),
+                            F.sum(F.when(F.col('status').isNull(), F.lit(1)).otherwise(F.lit(0))).alias('goodintvper'),
+                            F.sum(F.when(F.col('status') == 'I', F.lit(1)).otherwise(F.lit(0))).alias('interpolated'))
+
+                        interval_data_not_nm.unpersist()
+
+                        interval_agg_not_nm.createOrReplaceTempView('interval_data_not_nm')
+
+                        #inter_mada_not_nm
+
+                        sql_agg = "select  premiseid,  meterid, channel,  accountid, billstart,  billstop, metertype,  metermtpl, meterstart as meterstart_dt, meterstop as meterstop_dt, netmeter, goodintvper as goodintvcount , badintvper as badintvcount, interpolated, spi_check, kwh, spi \
+                        from  (select mn.premiseid, mn.accountid, billstart,  billstop, meterid, channel, metertype, metermtpl, meterstart, meterstop, netmeter, min(spi_min) as spi,  max(spi_count) as spi_check, sum(kwh) as kwh , sum(badintvper) as badintvper, sum(goodintvper) as goodintvper, sum(interpolated) as interpolated \
+                        from interval_data_not_nm  mn  \
+                        inner join (Select  premiseid,  min(meterstart) as min_meterstart, max(meterstop) as max_meterstop from meters  group by 1) m on m.premiseid = mn.uev_site  and (date_read_time between m.min_meterstart and m.max_meterstop) \
+                        group by 1,2,3,4,5,6,7,8,9, 10,11)"
+
+                        not_nm_mass_market = spark.sql(sql_agg)
+                        not_nm_mass_market.cache()
+                        not_nm_mass_marketcount = not_nm_mass_market.count()
+
+                        not_nm_mass_market = not_nm_mass_market.dropDuplicates()
+                        nw_uev_alr = not_nm_mass_market.filter(F.col('premiseid').isin(nw_premise_list))
+                        nw_uev_alr = nw_uev_alr.withColumn('billstop', (
+                                F.to_utc_timestamp(nw_uev_alr.billstop, timezone) - F.expr(interval_frec)).cast('date'))
+
+                        not_nm_mass_market = not_nm_mass_market.filter(~(F.col('premiseid').isin(nw_premise_list)))
+
+                        spark.catalog.dropTempView('mass_market_not_nm')
+
+                    finally:
+                        # ALWAYS RESTORE ORIGINAL SETTING (even if error occurs)
+                        spark.conf.set("spark.sql.legacy.timeParserPolicy", original_policy)
+                        print(f"Restored timeParserPolicy to: {original_policy}")
 
 
                 if item['temp_dataframe'] == 'ami_day':
@@ -895,30 +1374,61 @@ def to_process(spark,  process_step, process_run_date, job_run_id, region_name, 
                     next_month = (dte + relativedelta(months=1)).strftime('%Y%m')
 
 
-
-
                 if item['temp_dataframe'] == 'power_billing':
 
                     _p_billing = df.withColumn('read_date', to_date(F.col('read_strt_time'), 'yyyy-MM-dd'))
                     _p_billing = _p_billing.dropDuplicates()
 
                     _p_billing.createOrReplaceTempView('power_billing')
+                    _p_billing.unpersist()
 
+                    x1 = (np.arange(1, 100, 3)).tolist()
+                    x2 = (np.arange(2, 100, 3)).tolist()
 
-                    sql = "Select m.premiseid, i.accountid, billstart,  billstop,  m.meterid,  read_date, read_strt_time, round(kwh,4) as kwh, m.channel, uom, spi, interval_from_date, interval_to_date, m.metertype, metermtpl, meterstart , meterstop, netmeter, intdatafirst, intdatasecond  \
+                    #_parameters = {
+                    #    "seq1": [1, 4, 7, 10, 13, 16, 19, 22, 25, 28, 31, 34, 37, 40],
+                    #    "seq2": [2, 5, 8, 11, 14, 17, 20, 23, 26, 29, 32, 35, 38, 41]
+                    #}
+
+                    _parameters = {
+                        "seq1": x1,
+                        "seq2": x2
+                    }
+
+                    sql = "Select m.premiseid, i.accountid, billstart,  billstop,  me.meterid,  read_date, read_strt_time, round(kwh,4) as kwh, m.channel, uom, spi, interval_from_date, interval_to_date, me.metertype, metermtpl, meterstart , meterstop, netmeter, intdatafirst, intdatasecond  \
                                                         from power_billing m \
                                                         inner join inter_mada_all i on i.premiseid= m.premiseid  \
-                                                        inner join meters_pb me on me.premiseid = m.premiseid and m.meterid = me.meterid and m.metertype= me.metertype and m.channel= me.channel and  read_strt_time >= meterstart and  read_strt_time < meterstop where read_date >=  billstart and read_date < billstop"
+                                                        inner join meters_pb me on me.premiseid = m.premiseid and m.meterid = me.meterid and m.channel= me.channel and  read_strt_time >= meterstart and  read_strt_time < meterstop where read_date >=  billstart and read_date < billstop"
 
                     _power_billing = spark.sql(sql)
                     _power_billing = _power_billing.repartition(F.col("premiseid"), F.col("accountid"))
                     _power_billing.cache()
                     _power_billing_count = _power_billing.count()
 
+                    # spi_change
+                    window_spi = Window.partitionBy(['premiseid', 'accountid', 'meterid', 'billstart', 'billstop'])
+                    _power_billing = _power_billing.withColumn("spi_max", (F.max(F.col('spi')).over(window_spi)))
+
+                    _power_billing = _power_billing.withColumn("read_hour",F.date_trunc('hour', F.col('read_strt_time')))
+
+                    _power_billing = _power_billing.withColumn("read_strt_time_agg",F.when((F.col('spi_max') == F.col('spi')),
+                        F.unix_timestamp(F.col('read_strt_time'))).otherwise(F.unix_timestamp(F.col("read_hour")) + ((60 - F.col('spi_max')) * 60)).cast('timestamp'))
+
+                    columns_agg = ['premiseid', 'accountid', 'billstart', 'billstop', 'meterid', 'read_date', 'channel',
+                                   'uom', 'spi_max', 'interval_from_date', 'interval_to_date', 'metertype', 'metermtpl',
+                                   'netmeter', 'meterstart', 'meterstop', 'intdatafirst', 'intdatasecond','read_strt_time_agg']
+
+                    _power_billing = _power_billing.groupBy(columns_agg) \
+                        .agg(F.sum("kwh").alias('kwh'), F.approx_count_distinct("spi").alias('spi_count'))
+
+                    _power_billing = _power_billing.withColumnRenamed('spi_max', 'spi').withColumnRenamed('read_strt_time_agg', 'read_strt_time')
+                    # spi change
+
+
                     _power_billing = _power_billing.withColumn("interval_to_date", (F.unix_timestamp("interval_to_date") + ((60 - F.col('spi')) * 60)).cast('timestamp'))
 
                     _power_billing = interpolation_fill(_power_billing,
-                                                 ['premiseid', 'accountid','meterid','channel','metertype', 'metermtpl', 'meterstart' , 'meterstop', 'netmeter','billstart', 'billstop'], 'read_strt_time', ['kwh'], intdatafirst, intdatasecond , 'TIMESTAMP')
+                                                 ['premiseid', 'accountid','meterid','channel','metertype', 'spi', 'metermtpl', 'meterstart' , 'meterstop', 'netmeter','billstart', 'billstop'], 'read_strt_time', ['kwh'], intdatafirst, intdatasecond , 'TIMESTAMP')
 
                     _power_billing.createOrReplaceTempView('power_billing_intervale')
 
@@ -926,16 +1436,24 @@ def to_process(spark,  process_step, process_run_date, job_run_id, region_name, 
                                         sum(CASE WHEN status=9 then 1 else 0 end)  OVER(PARTITION BY mn.premiseid , mn.accountid, billstart,  billstop, mn.meterid, mn.channel, cast(read_time as date)) as bad, \
                                         sum(CASE WHEN status is null  then 1 else 0 end)  OVER(PARTITION BY mn.premiseid , mn.accountid, billstart,  billstop, mn.meterid, mn.channel, cast(read_time as date)) as good,  \
                                         sum(CASE WHEN status='I'  then 1 else 0 end)  OVER(PARTITION BY mn.premiseid , mn.accountid, billstart,  billstop, mn.meterid, mn.channel, cast(read_time as date)) as interpolated, \
-                                        metermtpl, meterstart , meterstop, netmeter \
+                                        metermtpl, meterstart , meterstop, netmeter, COALESCE(spi_count, 0 ) as spi_count \
                                         from power_billing_intervale mn "
 
                     interval_data_pb = spark.sql(sql_interval)
+
+                    for i, j in _parameters.items():
+                        mp = [(lambda x: F.lit(x))(x) for x in j]
+                        interval_data_pb = interval_data_pb.withColumn(i, F.array(mp))
+
+                    interval_data_pb = interval_data_pb.withColumn('standbySeq',F.lit(standbySeq))
+
                     interval_data_pb.cache()
                     interval_data_pb__count = interval_data_pb.count()
 
                     interval_data_pb = interval_data_pb.withColumn("count_meter_type",  F.approx_count_distinct("netmeter").over(Window.partitionBy('premiseid','accountid','billstart', 'billstop')))
                     interval_data_pb = interval_data_pb.withColumn("count_channel",F.approx_count_distinct("channel").over(Window.partitionBy('premiseid', 'accountid','billstart', 'billstop')))
-                    interval_data_pb = interval_data_pb.withColumn("delivered_received", F.expr("Case when channel in (1,4,7,10,13,16) then 'delivered' when channel in (2,5,8,11,14,17) then 'received' else 'ukn' end"))
+                    interval_data_pb = interval_data_pb.withColumn("delivered_received", F.expr("Case when (array_contains(seq1, channel) )  then '1' when (array_contains(seq2, channel) )  then '2' else '0' end"))
+                    #interval_data_pb = interval_data_pb.withColumn("delivered_received", F.expr("Case when channel in (1,4,7,10,13,16,19,22,25,28,31,34,37,40) then 'delivered' when channel in (2,5,8,11,14,17, 20,23,26,29,32,35,38,41) then 'received' else 'ukn' end"))
 
                     window_channel = Window.partitionBy(['premiseid', 'accountid',  'read_strt_time', 'billstart', 'billstop','delivered_received'])
                     interval_data_pb = interval_data_pb.withColumn("channel_Kwh",F.sum(F.col('kwh')).over(window_channel) )
@@ -945,7 +1463,8 @@ def to_process(spark,  process_step, process_run_date, job_run_id, region_name, 
 
 
                     #_agg_channel = interval_data_pb.filter(((F.col('count_channel')>1) & (interval_data_pb.channel.isin([1,2]))))
-                    _agg_channel = interval_data_pb.filter(((F.col('count_channel')>1) & (F.col('first_channel') == F.col('channel'))))
+                    _agg_channel = interval_data_pb.filter(((F.col('count_channel')>1) & (F.col('first_channel') == F.col('channel'))  & ~(F.col('channel') == 629)))
+                    _agg_channel = _agg_channel.filter((~((F.col('premiseid').isin(standbypremises)) & (F.col('delivered_received') != F.col('standbySeq')))))
 
                     window_lag = Window.partitionBy(['premiseid', 'accountid',  'read_strt_time', 'billstart', 'billstop']).orderBy("channel")
                     _agg_channel = _agg_channel.withColumn("Kwh_Lag", F.when(( (F.col('netmeter')==0)), F.col('channel_Kwh'))\
@@ -962,14 +1481,15 @@ def to_process(spark,  process_step, process_run_date, job_run_id, region_name, 
                     _agg_channel.createOrReplaceTempView('pb_channels_9')
 
                     sql_pb_9 = 'Select premiseid, accountid, metertype,metermtpl, read_strt_time, Kwh_Lag as kwh, meterid,  channel, uom,  spi,  status  \
-                    from pb_channels_9 where row_number =1 '
+                    from pb_channels_9 where row_number =1'
 
                     lse_pb_9 = spark.sql(sql_pb_9)
 
                     lse_pb = interval_data_pb.select('premiseid' , 'accountid' , 'metertype', 'metermtpl' , 'read_strt_time' , 'kwh' , 'meterid' , 'channel' , 'uom' , 'spi' , 'status')\
                         .unionByName(lse_pb_9.select('premiseid' , 'accountid' , 'metertype', 'metermtpl' , 'read_strt_time' , 'kwh' , 'meterid' , 'channel' , 'uom' , 'spi' , 'status'))
 
-
+                    lse_pb.cache()
+                    _lse_pb_count = lse_pb.count()
 
                     #agg
 
@@ -978,7 +1498,7 @@ def to_process(spark,  process_step, process_run_date, job_run_id, region_name, 
                                                                'date_read_time', 'metermtpl', 'meterstart', 'meterstop',
                                                                'netmeter') \
                         .agg(
-                        F.sum(F.col("Kwh")).alias('kwh'),
+                        F.sum(F.col("Kwh")).alias('kwh'), F.max(F.col('spi_count')).alias('spi_count'),
                         F.sum(F.when(F.col('status') == 9, F.lit(1)).otherwise(F.lit(0))).alias('badintvper'),
                         F.sum(F.when(F.col('status').isNull(), F.lit(1)).otherwise(F.lit(0))).alias('goodintvper'),
                         F.sum(F.when(F.col('status') == 'I', F.lit(1)).otherwise(F.lit(0))).alias('interpolated'))
@@ -987,26 +1507,35 @@ def to_process(spark,  process_step, process_run_date, job_run_id, region_name, 
                     _agg_interval_data_pb= _agg_interval_data_pb.select('premiseid', 'accountid', 'billstart', 'billstop',
                                                                'metertype', 'meterid', 'channel', 'spi_min',
                                                                'date_read_time', 'metermtpl', 'meterstart', 'meterstop',
-                                                               'netmeter', 'Kwh','badintvper','goodintvper', 'interpolated' )
+                                                               'netmeter', 'Kwh','badintvper','goodintvper', 'interpolated','spi_count' )
 
                     _agg_interval_data_pb.createOrReplaceTempView('interval_data_pb')
 
 
                     sql_agg_pb = "select  premiseid,  meterid, channel,  accountid, billstart,  billstop, metertype,  metermtpl, meterstart as meterstart_dt, meterstop as meterstop_dt, netmeter, goodintvper as goodintvcount , badintvper as badintvcount, interpolated, spi_check, kwh,  spi \
-                                      from  (select mn.premiseid, mn.accountid, billstart,  billstop, meterid, channel, metertype, metermtpl, meterstart, meterstop, netmeter, min(spi_min) as spi, count(distinct spi_min) as spi_check, sum(kwh) as kwh , sum(badintvper) as badintvper, sum(goodintvper) as goodintvper, sum(interpolated) as interpolated \
+                                      from  (select mn.premiseid, mn.accountid, billstart,  billstop, meterid, channel, metertype, metermtpl, meterstart, meterstop, netmeter, min(spi_min) as spi, max(spi_count) as spi_check, sum(kwh) as kwh , sum(badintvper) as badintvper, sum(goodintvper) as goodintvper, sum(interpolated) as interpolated \
                                       from interval_data_pb  mn  \
                                         group by 1,2,3,4,5,6,7,8,9, 10,11)"
 
                     power_billing = spark.sql(sql_agg_pb)
 
-                    power_billing = power_billing.withColumn("delivered_received", F.expr("Case when channel in (1,4,7,10,13,16) then 'delivered' when channel in (2,5,8,11,14,17) then 'received' else 'ukn' end"))
+                    for i, j in _parameters.items():
+                        mp = [(lambda x: F.lit(x))(x) for x in j]
+                        power_billing = power_billing.withColumn(i, F.array(mp))
+
+                    power_billing = power_billing.withColumn('standbySeq', F.lit(standbySeq))
+
+                    power_billing = power_billing.withColumn("delivered_received", F.expr("Case when (array_contains(seq1, channel) )  then '1' when (array_contains(seq2, channel) )  then '2' else '0' end"))
+                    #power_billing = power_billing.withColumn("delivered_received", F.expr("Case when channel in (1,4,7,10,13,16,19,22,25,28,31,34,37,40) then 'delivered' when channel in (2,5,8,11,14,17, 20,23,26,29,32,35,38,41) then 'received' else 'ukn' end"))
 
                     window_channel_bill = Window.partitionBy(['premiseid', 'accountid', 'billstart', 'billstop', 'delivered_received'])
                     power_billing = power_billing.withColumn("count_channel",F.approx_count_distinct("channel").over(Window.partitionBy('premiseid', 'accountid','billstart', 'billstop')))
                     power_billing = power_billing.withColumn("channel_Kwh", F.sum(F.col('kwh')).over(window_channel_bill))
                     power_billing = power_billing.withColumn("first_channel",F.min('channel').over(window_channel_bill))
 
-                    _agg_channel_bill = power_billing.filter(((F.col('count_channel') > 1) & (F.col('first_channel') == F.col('channel'))))
+                    _agg_channel_bill = power_billing.filter((F.col('count_channel') > 1) & (F.col('first_channel') == F.col('channel')) & ~(F.col('channel')== 629))
+                    _agg_channel_bill = _agg_channel_bill.filter((~((F.col('premiseid').isin(standbypremises)) & (
+                                F.col('delivered_received') != F.col('standbySeq')))))
 
                     window_lag_bill = Window.partitionBy(['premiseid', 'accountid', 'billstart', 'billstop']).orderBy("channel")
                     _agg_channel_bill = _agg_channel_bill.withColumn("Kwh_Lag_bill",F.when(((F.col('netmeter') == 0)),F.col('channel_Kwh')) \
@@ -1027,168 +1556,615 @@ def to_process(spark,  process_step, process_run_date, job_run_id, region_name, 
                     power_billing = power_billing.dropDuplicates()
 
 
+                if item['temp_dataframe'] == 'power_billing_gulf':
 
-            _fpl_union = nm_mass_market_nm.unionByName(not_nm_mass_market).unionByName(power_billing)
+                    for col in df.columns:
+                        df = df.withColumnRenamed(col, col.lower())
 
+                    l = []
+                    A_columns = ['VAL0000', 'VAL0015', 'VAL0030', 'VAL0045', 'VAL0100', 'VAL0115', 'VAL0130', 'VAL0145', 'VAL0200', 'VAL0215', 'VAL0230', 'VAL0245', 'VAL0300', 'VAL0315', 'VAL0330', 'VAL0345', 'VAL0400', 'VAL0415', 'VAL0430', 'VAL0445', 'VAL0500', 'VAL0515', 'VAL0530', 'VAL0545', 'VAL0600', 'VAL0615', 'VAL0630', 'VAL0645', 'VAL0700', 'VAL0715', 'VAL0730', 'VAL0745', 'VAL0800', 'VAL0815', 'VAL0830', 'VAL0845', 'VAL0900', 'VAL0915', 'VAL0930', 'VAL0945', 'VAL1000', 'VAL1015', 'VAL1030', 'VAL1045', 'VAL1100', 'VAL1115', 'VAL1130', 'VAL1145', 'VAL1200', 'VAL1215', 'VAL1230', 'VAL1245', 'VAL1300', 'VAL1315', 'VAL1330', 'VAL1345', 'VAL1400', 'VAL1415', 'VAL1430', 'VAL1445', 'VAL1500', 'VAL1515', 'VAL1530', 'VAL1545', 'VAL1600', 'VAL1615', 'VAL1630', 'VAL1645', 'VAL1700', 'VAL1715', 'VAL1730', 'VAL1745', 'VAL1800', 'VAL1815', 'VAL1830', 'VAL1845', 'VAL1900', 'VAL1915', 'VAL1930', 'VAL1945', 'VAL2000', 'VAL2015', 'VAL2030', 'VAL2045', 'VAL2100', 'VAL2115', 'VAL2130', 'VAL2145', 'VAL2200', 'VAL2215', 'VAL2230', 'VAL2245', 'VAL2300', 'VAL2315', 'VAL2330', 'VAL2345']
+                    B_columns = ', '.join(A_columns).split(',')
+                    n = len(A_columns)
 
-            _fpl_union.createOrReplaceTempView('fpl_union')
+                    for a in range(len(A_columns)):
+                        l.append("'{}',{}".format(A_columns[a], B_columns[a]))
 
-            sql_union = "select 'FPL' as company , b.premiseid, rltv_mo, meterid, channel,  customer, account_status, b.accountid, metertype, metermtpl, meterstart_dt, meterstop_dt, netmeter,  goodintvcount ,  badintvcount, interpolated, spi_check, kwh, \
-                                                ratecode,zipcode,streetaddress, wc_dist, b.billstart, b.billstop, bill_date, billkwh, avgmonthlykwh, num_months_monthlyavg, spi  \
-                                                from inter_mada_all b \
-                                                left join fpl_union mn on b.premiseid = mn.premiseid and b.accountid = mn.accountid and b.billstart = mn.billstart and  b.billstop = mn.billstop"
+                    k = ", ".join(l)
 
-            all_flp = spark.sql(sql_union)
-            all_flp.createOrReplaceTempView('fpl_alr')
+                    unpivotExpr = "stack({}, {} ) as (str_time,mrdg )".format(n,k)
+                    g_pb = df.select('premiseid', 'mandt', 'uom', 'profile',  'read_date', 'divisor' ,F.expr(unpivotExpr))
 
+                    g_pb = g_pb.withColumn('read_strt_time_str', (F.concat(F.col('read_date'), F.lit('T'), substring('str_time', 4, 2), F.lit(':'),substring('str_time', 6, 2), F.lit(':00Z'))))
+                    g_pb = g_pb.withColumn('read_strt_time', F.date_format(F.to_timestamp(F.col('read_strt_time_str'), "yyyy-MM-dd'T'HH:mm:ssXXX"), "yyyy-MM-dd HH:mm:ssx").cast('timestamp'))
+                    # g_pb = g_pb.withColumn('read_strt_time',
+                    #                        F.date_format(
+                    #                            F.to_timestamp(F.col('read_strt_time_str'), "yyyy-MM-dd'T'HH:mm:ssXXX"),
+                    #                            "yyyy-MM-dd HH:mm:ss"  # No timezone formatting
+                    #                        ).cast('timestamp')
+                    #                        )
+                    #g_pb = g_pb.withColumn('read_strt_time',(F.from_utc_timestamp((F.concat(F.col('read_date'), F.lit(' '), substring('str_time', 4,2), F.lit(':'),substring('str_time', 6,2), F.lit(':00'))), "America/New_York")).cast('timestamp'))
 
-            lse = lse.unionByName(lse_not_nm).unionByName(lse_pb)
+                    g_pb = g_pb.withColumn('spi', F.lit(15)).withColumn('channel', F.lit(1)).withColumn('mrdg', F.col('mrdg')/F.col('divisor')).withColumn('read_date', F.to_date(F.col('read_strt_time')))
 
-            lse.createOrReplaceTempView('lse_union')
+                    g_pb.createOrReplaceTempView('gulf_PB')
 
-            lse_sql_union = "select b.premiseid, b.accountid, metertype, metermtpl as metermtply , read_strt_time,   kwh,    meterid, channel, uom, spi , status, customer, ratecode, zipcode, billkwh, wc_dist  \
-                                                            from lse_union b \
-                                                            left join inter_mada_all mn on b.premiseid = mn.premiseid and b.accountid = mn.accountid and b.read_strt_time >=  mn.billstart and b.read_strt_time < mn.billstop "
+                    sql = "Select m.premiseid, i.accountid, billstart, billstop, me.meterid, read_date, read_strt_time, round((mrdg),4) as kwh, channel, uom, spi, interval_from_date, interval_to_date, me.metertype, metermtpl, meterstart , meterstop, netstart, netstop, netmeter , CASE WHEN netmeter = 0  then 0 WHEN (read_date >= netstart and read_date <= netstop ) then 1 else 0 end as is_netmeter,   intdatafirst, intdatasecond  \
+                                        from gulf_PB m \
+                                        inner join meters me on m.premiseid = me.premiseid and read_date between meterstart and  meterstop \
+                                        inner join inter_mada_all i on i.premiseid= m.premiseid  \
+                                        where read_date >= billstart and read_date <= billstop"
 
-            all_ls = spark.sql(lse_sql_union)
-            all_ls.createOrReplaceTempView('fpl_lse')
+                    _pb_gulf = spark.sql(sql)
+                    _pb_gulf = _pb_gulf.dropDuplicates()
 
+                    _pb_gulf = _pb_gulf.repartition(F.col("premiseid"), F.col("accountid"))
+                    _pb_gulf.cache()
+                    _pb_gulf_count = _pb_gulf.count()
 
+                    _pb_gulf = _pb_gulf.withColumn("netstop", F.when(((F.col('netstop').isNotNull()) & (F.col('netstop') > F.col('meterstop'))),
+                        F.col('meterstop')).otherwise(F.col('netstop')))
 
-            print(str(datetime.now().strftime('%Y-%m-%d-%H:%M:%S')))
-            for target in target_list:
-                print(target)
-                extraction_query = target['extraction_query']
-                if 'parameters' in target:
-                    if target['parameters'] != None:
-                        extraction_query = target['extraction_query'].format(eval(target['parameters']))
-                extraction_query = to_fStrings(extraction_query)
-                df_master = spark.sql(extraction_query)
-                df_master.persist(StorageLevel.MEMORY_AND_DISK)
+                    _pb_gulf = _pb_gulf.withColumn("netstop", F.when((F.col('netmeter') == 0),F.col('meterstop')) \
+                        .otherwise(F.when(((F.col('netstop').isNotNull()) & (F.col('is_netmeter') == 0)),F.col('netstart') - F.expr('INTERVAL 1 DAY'))
+                        .otherwise(F.col('netstop'))))
 
-                audit_count = df_master.count()
+                    _pb_gulf = _pb_gulf.withColumn("netstart", F.when((F.col('netmeter') == 0),F.col('meterstart')) \
+                            .otherwise(F.when(((F.col('netstop').isNotNull()) & (F.col('is_netmeter') == 0)),F.col('meterstart')).otherwise(F.col('netstart'))))
 
-                # write in target
+                    _pb_gulf = _pb_gulf.withColumn("meterstart", F.col("netstart")).withColumn("meterstop", F.col("netstop"))
 
-                for db in list(target['target_database']):
-                    print(db)
-                    audit_process_status ='success'
+                    _pb_gulf = _pb_gulf.withColumn("netmeter", F.col("is_netmeter"))
 
-                    _df = create_target(db, df_master, spark, base_url)
-                    connection_destination = get_connection_jdbc(sm_client, connection_key, db['destination'])
+                    _pb_gulf = _pb_gulf.withColumn("channel", F.when(F.col("is_netmeter") ==1 , F.lit(9)).otherwise(F.col('channel')))
 
-                    for col in _df.columns:
-                        _df = _df.withColumnRenamed(col, col.lower().replace(' ', '_').replace("-", "_"))
+                    _pb_gulf = _pb_gulf.withColumn('meterstart', F.col("meterstart").cast('timestamp'))
+                    _pb_gulf = _pb_gulf.withColumn('meterstop', F.col("meterstop").cast('timestamp'))
 
-                    if audit_count != 0:
-                        # add audit columns :
-                        _df = _df.withColumn("process_run_date", F.lit(process_run_date).cast("int")) \
-                            .withColumn("job_run_id", F.lit(job_run_id))
+                    _pb_gulf = _pb_gulf.withColumn("interval_to_date", (
+                            F.unix_timestamp("interval_to_date") + ((60 - F.col('spi')) * 60)).cast('timestamp'))
 
-                        if db['outputtype'] == 's3_file':
-                            try:
-                                _file_name = '{}_{}'.format(db['table_name'], eval(db['partition_key']))
-                                _path_s3= 's3://{}/{}/{}'.format(connection_destination['data_bucket_name'],db['table_name'],_file_name)
-                                _df.coalesce(1).write.option("header", "true").mode('overwrite').csv(_path_s3)
-                            except Exception as error:
-                                audit_process_status = 'error'
-                                print("Oops! An exception has occured:", error)
-                                print("Exception TYPE:", type(error))
-
-                        if db['outputtype'] == 'gp_batch':
-                            postgres_writer = PostgresSQLWriter(connection_destination, spark)
-                            audit_process_status = postgres_writer.write_batch(_df, db, False)
-
-                        if db['outputtype'] == 'postgresql_batch':
-                            postgres_writer = PostgresSQLWriter(connection_destination, spark)
-                            audit_process_status = postgres_writer.write_batch(_df, db, True)
+                    _pb_gulf = interpolation_fill(_pb_gulf,['premiseid', 'accountid', 'meterid', 'channel', 'metertype','spi', 'metermtpl', 'netmeter', 'meterstart', 'meterstop',
+                                                        'billstart', 'billstop'], 'read_strt_time', ['kwh'],intdatafirst, intdatasecond, 'GULF')
 
 
-                        if db['outputtype'] == 'redshift':
-                            redshift_writer = PostgresSQLWriter(connection_destination, spark)
-                            audit_process_status = redshift_writer.redsfift_copy(_df, db )
+                    #_pb_gulf = _pb_gulf.withColumn('read_strt_time_f',F.date_format(F.col('read_strt_time'), "yyyy-MM-dd'T'HH:mm:ssXXX"))
+
+                    _pb_gulf.createOrReplaceTempView('power_billing_gulf')
+
+                    sql_interval = "Select  mn.premiseid , mn.accountid, billstart,  billstop, metertype, COALESCE(read_strt_time, read_time ) as read_strt_time , kwh, mn.meterid, mn.channel, uom, COALESCE(spi,spi_agg)*60 as spi, status, COALESCE(spi,spi_agg) as spi_min, cast(read_time as date) as date_read_time, \
+                                    sum(CASE WHEN status=9 then 1 else 0 end)  OVER(PARTITION BY mn.premiseid , mn.accountid, billstart,  billstop, mn.meterid, mn.channel, cast(read_time as date)) as bad, \
+                                    sum(CASE WHEN status is null  then 1 else 0 end)  OVER(PARTITION BY mn.premiseid , mn.accountid, billstart,  billstop, mn.meterid, mn.channel, cast(read_time as date)) as good, \
+                                    sum(CASE WHEN status='I' then 1 else 0 end)  OVER(PARTITION BY mn.premiseid , mn.accountid, billstart,  billstop, mn.meterid, mn.channel, cast(read_time as date)) as interpolated, \
+                                    metermtpl, meterstart , meterstop, netmeter, 1 as spi_count  \
+                                    from power_billing_gulf mn"
+
+                    interval_data_pb_gulf = spark.sql(sql_interval)
+
+                    interval_data_pb_gulf.cache()
+                    interval_data_pb_gulf_count = interval_data_pb_gulf.count()
+                    lse_pb = interval_data_pb_gulf.select('premiseid', 'accountid', 'metertype', 'metermtpl', 'read_strt_time','kwh', 'meterid', 'channel', 'uom', 'spi', 'status')
+
+                    interval_agg_pb_gulf = interval_data_pb_gulf.groupBy('premiseid', 'accountid', 'billstart', 'billstop',
+                                                               'metertype', 'meterid', 'channel', 'spi_min',
+                                                               'date_read_time', 'metermtpl', 'meterstart', 'meterstop',
+                                                               'netmeter') \
+                    .agg(
+                    F.sum(F.col("kwh")).alias('kwh'), F.max(F.col('spi_count')).alias('spi_count'),
+                    F.sum(F.when(F.col('status') == 9, F.lit(1)).otherwise(F.lit(0))).alias('badintvper'),
+                    F.sum(F.when(F.col('status').isNull(), F.lit(1)).otherwise(F.lit(0))).alias('goodintvper'),
+                    F.sum(F.when(F.col('status') == 'I', F.lit(1)).otherwise(F.lit(0))).alias('interpolated'))
+
+                    interval_agg_pb_gulf.createOrReplaceTempView('interval_data_pb_gulf')
+
+                    sql_agg = "select  premiseid,  meterid, channel,  accountid, billstart,  billstop, metertype,  metermtpl, meterstart as meterstart_dt, meterstop as meterstop_dt, netmeter, goodintvper as goodintvcount , badintvper as badintvcount, interpolated, spi_check, (kwh) as kwh, spi \
+                                   from  (select mn.premiseid, mn.accountid, billstart,  billstop, meterid, channel, metertype, metermtpl, meterstart, meterstop, netmeter, min(spi_min) as spi,  max(spi_count) as spi_check, sum(kwh) as kwh , sum(badintvper) as badintvper, sum(goodintvper) as goodintvper, sum(interpolated) as interpolated \
+                                   from interval_data_pb_gulf  mn  \
+                                   inner join (Select  premiseid,  min(meterstart) as min_meterstart, max(meterstop) as max_meterstop from meters  group by 1) m on m.premiseid = mn.premiseid  and (date_read_time between m.min_meterstart and m.max_meterstop) \
+                                   group by 1,2,3,4,5,6,7,8,9, 10,11)"
+
+                    power_billing = spark.sql(sql_agg)
+                    power_billing = power_billing.dropDuplicates()
+
+                    power_billing_meters = power_billing.select('meterid').distinct()
+                    power_billing_meters = power_billing_meters.agg(F.collect_list("meterid").alias('meterid_pb_values'))
+                    power_billing_meters = power_billing_meters.withColumn("meterid_pb_list", array_distinct("meterid_pb_values"))
+                    power_billing_meters = power_billing_meters.withColumn('company', F.lit(company))
+                    all_meters = all_meters.join(power_billing_meters.hint("broadcast"), ["company"],'inner')
+                    all_meters = all_meters.withColumn("meterid_except",F.array_except(F.col('meterid_list'),F.col('meterid_pb_list')))
+
+                    all_meters_list = all_meters.select('meterid_except').collect()[0]
+                    meters_all_list = ','.join(f"'{str(elem)}'" for elem in all_meters_list.meterid_except)
+                    all_meters_condition = "mtr_id in ({})".format(meters_all_list)
+                    #all_meters_condition = "mtr_id in ('5991593')"
 
 
-                        if db['outputtype'] == 'parquet':
-                            athena_writer = AthenaWriter(connection_destination, athena)
-                            audit_process_status = athena_writer.write_table(_df, db)
+
+                if item['temp_dataframe'] == 'mass_market_gulf':
+                    actual_datetime = str(datetime.now().strftime('%Y%m%d%H%M%S'))
+
+                    g_mm = df.withColumn('read_date', to_date(F.col('read_strt_time'), 'yyyy-MM-dd'))
+                    g_mm = g_mm.dropDuplicates()
+
+                    g_mm.createOrReplaceTempView('gulf_mass_market')
+
+                    #_meters_gulf = _meters.withColumn('meterid', F.regexp_replace('meterid', r'^[0]*', ''))
+                    #_meters_gulf.createOrReplaceTempView('gulf_meters')
+
+                    sql = "Select me.premiseid, i.accountid, billstart, billstop, m.meterid, read_date, read_strt_time, round((mrdg*metermtpl),4) as kwh, channel, uom, spi, interval_from_date, interval_to_date, me.metertype, metermtpl, meterstart , meterstop, netstart, netstop, netmeter , CASE WHEN netmeter = 0  then 0 WHEN (read_date >= netstart and read_date <= netstop ) then 1 else 0 end as is_netmeter,   intdatafirst, intdatasecond  \
+                    from gulf_mass_market m \
+                    inner join meters me on m.meterid = me.meterid and read_date between meterstart and  meterstop \
+                    inner join inter_mada_all i on i.premiseid= me.premiseid  \
+                    where read_date >= billstart and read_date <= billstop"
+
+                    _mass_market_gulf = spark.sql(sql)
+                    _mass_market_gulf = _mass_market_gulf.dropDuplicates()
 
 
-                        if db['outputtype'] == 'hudi':
-                            hudi_writer = HudiWriter(connection_destination, athena, spark)
-                            audit_process_status = hudi_writer.write_table(_df, db)
+                    _mass_market_gulf = _mass_market_gulf.repartition(F.col("premiseid"), F.col("accountid"))
+                    _mass_market_gulf.cache()
+                    _mass_market_gulf_count = _mass_market_gulf.count()
+
+                    # Channel 1 should not be in a net meter date range
+                    _mass_market_gulf = _mass_market_gulf.filter(~((F.col('channel') == 1 ) & (F.col('is_netmeter') == 1)))
+
+                    _mass_market_gulf = _mass_market_gulf.withColumn("netstop", F.when(((F.col('netstop').isNotNull()) & (F.col('netstop') > F.col('meterstop'))), F.col('meterstop')) .otherwise(F.col('netstop')))
+                    _mass_market_gulf = _mass_market_gulf.withColumn("netstart", F.when(
+                        ((F.col('netstart').isNotNull()) & (F.col('is_netmeter') == 1) & (F.col('netstart') < F.col('meterstart'))),
+                        F.col('meterstart')).otherwise(F.col('netstart')))
+
+                    _mass_market_gulf = _mass_market_gulf.withColumn("netstop", F.when( (F.col('netmeter') == 0) , F.col('meterstop')) \
+                        .otherwise(F.when(( (F.col('netstop').isNotNull()) & (F.col('is_netmeter') == 0)), F.col('netstart') - F.expr('INTERVAL 1 DAY'))
+                        .otherwise(F.col('netstop'))))
+
+                    # added
+                    _mass_market_gulf = _mass_market_gulf.withColumn("netstop", F.when(((F.col('netstop').isNotNull()) & (F.col('is_netmeter') == 0) & (F.col('netstop') > F.col('meterstop'))), F.col('meterstop')).otherwise(F.col('netstop')))
+
+                    #_mass_market_gulf = _mass_market_gulf.withColumn("netstop", F.when(
+                    #    ((F.col('netmeter') == 0) & (F.col('netstop').isNull())), F.col('meterstop')) \
+                    #                                                 .otherwise(
+                    #    F.when(((F.col('netmeter') == 1) & (F.col('netstop').isNotNull()) & (F.col('channel') == 1)),
+                    #           F.col('netstart') - F.expr('INTERVAL 1 DAY'))
+                    #    .otherwise(F.when(((F.col('netmeter') == 0) & (F.col('netstop').isNotNull())),
+                    #                      F.col('netstart')).otherwise(F.col('netstop')))))
+
+                    #_mass_market_gulf = _mass_market_gulf.withColumn("netstart", F.when(((F.col('netmeter') == 0) & (F.col('netstart').isNull()) ), F.col('meterstart')).otherwise(F.col('netstart')))
+
+                    #_mass_market_gulf = _mass_market_gulf.withColumn("netstart", F.when(((F.col('netmeter') == 0) & (F.col('netstart').isNull()) ), F.col('meterstart')) \
+                    #    .otherwise(F.when(((F.col('netmeter') == 0) & (F.col('channel') == 1)),F.col('meterstart') ).otherwise(F.col('netstart'))))
+
+                    _mass_market_gulf = _mass_market_gulf.withColumn("netstart", F.when((F.col('netmeter') == 0) , F.col('meterstart')) \
+                        .otherwise(F.when(((F.col('netstop').isNotNull()) & (F.col('is_netmeter') == 0)),F.col('meterstart') ).otherwise(F.col('netstart'))))
+
+                    window_netmeter = Window.partitionBy(['premiseid', 'accountid', 'meterid', 'metertype', 'billstart', 'billstop',  'netmeter' ,'is_netmeter',  'netstart', 'netstop'])
+
+                    _mass_market_gulf = _mass_market_gulf.withColumn("channel_min", (F.min(F.col('channel')).over(window_netmeter))) \
+                        .withColumn("channel_max", (F.max(F.col('channel')).over(window_netmeter)))
+
+
+                    _mass_market_gulf = _mass_market_gulf.withColumn("meterstart", F.col("netstart")).withColumn("meterstop", F.col("netstop"))
+
+                    #For non-net meter date range, if channel 1 is present, channel 2 cannot be.
+                    _mass_market_gulf = _mass_market_gulf.filter(~((F.col('channel') == 2) & (F.col('channel_min') == 1) & (F.col('is_netmeter') == 0)))
+
+                    #If no channel 1 in the non-net meter date range, then channel 2 if there are channels 2 and 4, then no channel 1
+                    #_mass_market_gulf = _mass_market_gulf.filter(~( (F.col('channel') != F.col('channel_min')) & (F.col('netmeter') == 1) & (F.col('is_netmeter') == 0 ) ))
+
+                    _mass_market_gulf = _mass_market_gulf.withColumn("netmeter", F.col("is_netmeter"))
+
+                    #spi_change
+                    window_spi = Window.partitionBy(['premiseid', 'accountid', 'meterid', 'billstart', 'billstop'])
+                    _mass_market_gulf = _mass_market_gulf.withColumn("spi_max", (F.max(F.col('spi')).over(window_spi)))
+
+                    _mass_market_gulf = _mass_market_gulf.withColumn("read_hour", F.date_trunc('hour', F.col('read_strt_time')))
+
+
+                    _mass_market_gulf = _mass_market_gulf.withColumn("read_strt_time_agg", F.when((F.col('spi_max') == F.col('spi')), F.unix_timestamp(F.col('read_strt_time'))).otherwise(
+                                F.unix_timestamp(F.col("read_hour")) + ((60 - F.col('spi_max')) * 60)).cast('timestamp'))
+
+
+                    columns_agg = ['premiseid', 'accountid', 'billstart', 'billstop', 'meterid', 'read_date', 'channel', 'uom', 'spi_max', 'interval_from_date', 'interval_to_date', 'metertype', 'metermtpl', 'netmeter', 'meterstart', 'meterstop',   'intdatafirst', 'intdatasecond', 'read_strt_time_agg']
+                    _mass_market_gulf = _mass_market_gulf.groupBy(columns_agg) \
+                        .agg(F.sum("kwh").alias('kwh'),  F.approx_count_distinct("spi").alias('spi_count'))
+
+                    _mass_market_gulf = _mass_market_gulf.withColumnRenamed('spi_max', 'spi').withColumnRenamed('read_strt_time_agg', 'read_strt_time')
+
+
+                    _mass_market_gulf = _mass_market_gulf.withColumn('meterstart', F.col("meterstart").cast('timestamp'))
+                    _mass_market_gulf = _mass_market_gulf.withColumn('meterstop', F.col("meterstop").cast('timestamp'))
+
+                    _mass_market_gulf = _mass_market_gulf.withColumn("interval_to_date", (F.unix_timestamp("interval_to_date") + ((60 - F.col('spi')) * 60)).cast('timestamp'))
+
+                    _mass_market_gulf = interpolation_fill(_mass_market_gulf, ['premiseid', 'accountid','meterid','channel','metertype', 'spi', 'metermtpl', 'netmeter', 'meterstart' , 'meterstop', 'billstart', 'billstop'], 'read_strt_time', ['kwh'], intdatafirst, intdatasecond,'GULF'  )
+
+
+
+                    # add channel 9
+                    #_mass_market_gulf_nm = _mass_market_gulf.filter(F.col('netmeter') == 1)
+                    _mass_market_gulf_nm = _mass_market_gulf.filter(_mass_market_gulf.channel.isin([2,4]))
+
+                    window_lag = Window.partitionBy(['premiseid', 'accountid', 'meterid','read_time',  'billstart',  'billstop']).orderBy("channel")
+                    _mass_market_gulf_9 = _mass_market_gulf_nm.withColumn("Kwh_Lag", (F.lag(F.col('kwh')).over(window_lag) - F.col('kwh'))) \
+                            .withColumn("row_number",F.row_number().over(window_lag))
+                    _mass_market_gulf_9 = _mass_market_gulf_9.filter(F.col('row_number') == 2 )
+                    _mass_market_gulf_9 = _mass_market_gulf_9.withColumn("Kwh",  F.col('Kwh_Lag')).withColumn("channel", F.lit(9))
+
+                    drop_columns = ['row_number', 'Kwh_Lag']
+                    _mass_market_gulf_9 = _mass_market_gulf_9.drop(*drop_columns)
+
+                    _mass_market_gulf =_mass_market_gulf.unionByName(_mass_market_gulf_9)
+                    _mass_market_gulf.createOrReplaceTempView('mass_market_gulf')
+
+                    sql_interval = "Select  mn.premiseid , mn.accountid, billstart,  billstop, metertype, COALESCE(read_strt_time, read_time ) as read_strt_time , kwh, mn.meterid, mn.channel, uom, COALESCE(spi,spi_agg)*60 as spi, status, COALESCE(spi,spi_agg) as spi_min, cast(read_time as date) as date_read_time, \
+                     sum(CASE WHEN status=9 then 1 else 0 end)  OVER(PARTITION BY mn.premiseid , mn.accountid, billstart,  billstop, mn.meterid, mn.channel, cast(read_time as date)) as bad, \
+                     sum(CASE WHEN status is null  then 1 else 0 end)  OVER(PARTITION BY mn.premiseid , mn.accountid, billstart,  billstop, mn.meterid, mn.channel, cast(read_time as date)) as good, \
+                     sum(CASE WHEN status='I' then 1 else 0 end)  OVER(PARTITION BY mn.premiseid , mn.accountid, billstart,  billstop, mn.meterid, mn.channel, cast(read_time as date)) as interpolated, \
+                     metermtpl, meterstart , meterstop, netmeter, COALESCE(spi_count, 0 ) as spi_count  \
+                     from mass_market_gulf mn "
+                    interval_data_gulf = spark.sql(sql_interval)
+
+                    interval_data_gulf.cache()
+                    interval_data_gulf_count = interval_data_gulf.count()
+                    lse = interval_data_gulf.select('premiseid', 'accountid', 'metertype', 'metermtpl','read_strt_time', 'kwh', 'meterid', 'channel', 'uom','spi', 'status')
+                    lse = lse.unionByName(nw_uev_lse)
+
+                    interval_agg_gulf = interval_data_gulf.groupBy('premiseid', 'accountid', 'billstart',  'billstop', 'metertype', 'meterid', 'channel', 'spi_min', 'date_read_time', 'metermtpl', 'meterstart' , 'meterstop', 'netmeter') \
+                        .agg(
+                        F.sum(F.col("kwh")).alias('kwh'), F.max(F.col('spi_count')).alias('spi_count'),
+                        F.sum(F.when(F.col('status') == 9, F.lit(1)).otherwise(F.lit(0))).alias('badintvper'),
+                        F.sum(F.when(F.col('status').isNull(), F.lit(1)).otherwise(F.lit(0))).alias('goodintvper'),
+                        F.sum(F.when(F.col('status') == 'I', F.lit(1)).otherwise(F.lit(0))).alias('interpolated'))
+
+                    interval_agg_gulf.createOrReplaceTempView('interval_data_gulf')
+
+
+                    sql_agg = "select  premiseid,  meterid, channel,  accountid, billstart,  billstop, metertype,  metermtpl, meterstart as meterstart_dt, meterstop as meterstop_dt, netmeter, goodintvper as goodintvcount , badintvper as badintvcount, interpolated, spi_check, kwh, spi \
+                    from  (select mn.premiseid, mn.accountid, billstart,  billstop, meterid, channel, metertype, metermtpl, meterstart, meterstop, netmeter, min(spi_min) as spi,  max(spi_count) as spi_check, sum(kwh) as kwh , sum(badintvper) as badintvper, sum(goodintvper) as goodintvper, sum(interpolated) as interpolated \
+                    from interval_data_gulf  mn  \
+                    inner join (Select  premiseid,  min(meterstart) as min_meterstart, max(meterstop) as max_meterstop from meters  group by 1) m on m.premiseid = mn.premiseid  and (date_read_time between m.min_meterstart and m.max_meterstop) \
+                    group by 1,2,3,4,5,6,7,8,9, 10,11)"
+
+                    gulf_mass_market = spark.sql(sql_agg)
+                    gulf_mass_market = gulf_mass_market.dropDuplicates()
+
+                    #not_nm_mass_market = gulf_mass_market.filter(F.col('netmeter') == 0)
+                    not_nm_mass_market = gulf_mass_market.filter(~gulf_mass_market.channel.isin([2,4,9]))
+                    not_nm_mass_market.cache()
+                    not_nm_mass_marketcount = not_nm_mass_market.count()
+
+                    not_nm_mass_market = not_nm_mass_market.unionByName(nw_uev_alr)
+                    not_nm_mass_market.cache()
+                    not_nm_mass_marketcount = not_nm_mass_market.count()
+
+                    #nm_mass_market_nm = gulf_mass_market.filter(F.col('netmeter') == 1)
+                    nm_mass_market_nm = gulf_mass_market.filter(gulf_mass_market.channel.isin([2, 4, 9]))
+
+                    window_lag_9 = Window.partitionBy(
+                        ['premiseid', 'accountid', 'meterid', 'billstart', 'billstop']).orderBy("channel")
+
+                    nm_mass_market_nm = nm_mass_market_nm.withColumn("Kwh_Lag", (
+                                F.lag(F.col('kwh'), 2).over(window_lag_9) - F.lag(F.col('kwh')).over(window_lag_9)))
+
+                    nm_mass_market_nm = nm_mass_market_nm.withColumn("Kwh", F.expr(
+                        " CASE WHEN (channel = 9 and Kwh_Lag >= 0) then Kwh_Lag WHEN (channel = 9 and Kwh_Lag < 0)  then 0 else Kwh end"))
+
+                    drop_columns = ['Kwh_Lag']
+                    nm_mass_market_nm = nm_mass_market_nm.drop(*drop_columns)
+
+
+            if break_process == False:
+                _fpl_union = nm_mass_market_nm.unionByName(not_nm_mass_market).unionByName(power_billing)
+                not_nm_mass_market.unpersist()
+                nm_mass_market_nm.unpersist()
+                power_billing.unpersist()
+                _fpl_union = _fpl_union.dropDuplicates()
+
+                res_ev_mada = all_mada.filter(((F.col('ratecode') == '46') | (F.col('ratecode') == 'FERSEV_46')) & (F.col('evkwh') == 0))
+                resev_premises = res_ev_mada.agg(F.collect_list("premiseid").alias('res_premise_values'))
+                resev_premises = resev_premises.withColumn("premise_list", array_distinct("res_premise_values"))
+                resev_premise_list = resev_premises.select('premise_list').collect()[0][0]
+                res_ev_prem = _fpl_union.filter(F.col('premiseid').isin(resev_premise_list))
+
+                res_ev_1 = res_ev_prem.filter((F.col('channel') == 1) | (F.col('channel') == 2))
+                res_ev_1000 = res_ev_prem.filter((F.col('channel') == 1000))
+                resev_premises = res_ev_1000.agg(F.collect_list("premiseid").alias('res_premise_values'))
+                resev_premises = resev_premises.withColumn("premise_list", array_distinct("res_premise_values"))
+                resev_premise_list = resev_premises.select('premise_list').collect()[0][0]
+                res_ev = res_ev_1.filter(~(F.col('premiseid').isin(resev_premise_list)))
+                res_ev = res_ev.withColumn("channel", F.lit(1000))
+                res_ev = res_ev.withColumn("kwh", F.lit(0))
+                res_ev = res_ev.dropDuplicates()
+                _fpl_union = _fpl_union.unionByName(res_ev)
+
+                _fpl_union.createOrReplaceTempView('fpl_union')
+
+                sql_union = "select  b.premiseid, rltv_mo, COALESCE(mn.meterid, me.meterid) as meterid , channel,  customer, account_status, b.accountid, COALESCE(mn.metertype, me.metertype) as metertype , metermtpl, \
+                COALESCE(meterstart_dt,min_meterstart ) as meterstart_dt , COALESCE(meterstop_dt, max_meterstop) as meterstop_dt,  b.netmeter, \
+                 goodintvcount ,  badintvcount, interpolated, spi_check, round(kwh,4) as kwh, \
+                 ratecode,zipcode,streetaddress, wc_dist, b.billstart, b.billstop, bill_date, case when channel = 1000 then evkwh else billkwh end as billkwh, avgmonthlykwh, num_months_monthlyavg, spi  \
+                from inter_mada_all b \
+                left join fpl_union mn on b.premiseid = mn.premiseid and b.accountid = mn.accountid and b.billstart = mn.billstart and  b.billstop = mn.billstop \
+                left join (Select  premiseid, meterid, metertype, min(meterstart) as min_meterstart, max(meterstop) as max_meterstop from meters  group by 1,2,3) me on b.premiseid = me.premiseid and  ((b.billstart between min_meterstart and me.max_meterstop) or (b.billstop between min_meterstart and me.max_meterstop))  and mn.premiseid is null "
+
+                all_flp = spark.sql(sql_union)
+                all_flp = all_flp.dropDuplicates()
+
+                if mada_duplicate != None:
+
+                    sql_union = "select  b.premiseid, rltv_mo,  me.meterid as meterid , null as channel,  customer, account_status, b.accountid,  me.metertype as metertype , null as metermtpl, \
+                                     null as meterstart_dt , null as meterstop_dt,  null as netmeter, \
+                                     null as goodintvcount , null as badintvcount, null as interpolated, null as spi_check, null as kwh, \
+                                     ratecode,zipcode,streetaddress, wc_dist, b.billstart, b.billstop, bill_date, billkwh, avgmonthlykwh, num_months_monthlyavg, null as spi  \
+                                     from inter_mada_duplicate b \
+                                     left join (Select  premiseid, meterid, metertype, min(meterstart) as min_meterstart, max(meterstop) as max_meterstop from meters  group by 1,2,3) me on b.premiseid = me.premiseid and  ((b.billstart between min_meterstart and me.max_meterstop) or (b.billstop between min_meterstart and me.max_meterstop))  "
+
+                    duplicated_to_add = spark.sql(sql_union)
+                    all_flp = all_flp.unionByName(duplicated_to_add)
+
+
+                #all_flp.createOrReplaceTempView('fpl_alr')
+
+                all_flp_count = all_flp.groupby(
+                    ['premiseid', 'accountid', 'meterid', 'metertype', 'channel', 'billstart', 'billstop', 'meterstart_dt','meterstop_dt']) \
+                    .count() \
+                    .where('count > 1') \
+                    .sort('count', ascending=False).count()
+
+                print(all_flp_count)
+
+                lse = lse.unionByName(lse_not_nm).unionByName(lse_pb)
+                lse_not_nm.unpersist()
+                lse_pb.unpersist()
+                lse.createOrReplaceTempView('lse_union')
+                lse.unpersist()
+
+
+                if company == 'FPLNW':
+                    lse_sql_union = "select b.premiseid, b.accountid, metertype, metermtpl as metermtply , read_strt_time,   kwh,    meterid, channel, uom, spi , status, customer, ratecode, zipcode, billkwh, wc_dist  \
+                                                                from lse_union b \
+                                                                inner join inter_mada_all mn on b.premiseid = mn.premiseid and b.accountid = mn.accountid and b.read_strt_time >=  mn.billstart and b.read_strt_time < date_add(mn.billstop,1) "
+                else:
+                    lse_sql_union = "select b.premiseid, b.accountid, metertype, metermtpl as metermtply , read_strt_time,   kwh,    meterid, channel, uom, spi , status, customer, ratecode, zipcode, billkwh, wc_dist  \
+                                                                from lse_union b \
+                                                                inner join inter_mada_all mn on b.premiseid = mn.uev_site and b.accountid = mn.accountid and b.read_strt_time >=  mn.billstart and b.read_strt_time < mn.billstop "
+
+                all_ls = spark.sql(lse_sql_union)
+                all_ls = all_ls.dropDuplicates()
+
+                duplicate_status = False
+                duplicated = all_ls.groupby(['premiseid', 'accountid', 'channel', 'read_strt_time', 'meterid']) \
+                    .count() \
+                    .where('count > 1') \
+                    .sort('count', ascending=False)
+
+                print(duplicated.limit(10).toPandas())
+                count_duplicated = duplicated.count()
+                print('Duplicates values: {}'.format(count_duplicated))
+
+
+                if count_duplicated > 0:
+                    duplicate_status = True
+                    all_flp = spark.createDataFrame(data=sc_RDD, schema=arl_schema)
+                    all_ls = spark.createDataFrame(data=sc_RDD, schema=lse_schema)
+
+                all_flp = all_flp.dropDuplicates()
+
+                all_ls.createOrReplaceTempView('fpl_lse')
+                all_flp.createOrReplaceTempView('fpl_alr')
+
+
+
+                print(str(datetime.now().strftime('%Y-%m-%d-%H:%M:%S')))
+                for target in target_list:
+                    print(target)
+                    extraction_query = target['extraction_query']
+                    if 'parameters' in target:
+                        if target['parameters'] != None:
+                            extraction_query = target['extraction_query'].format(eval(target['parameters']))
+                    extraction_query = to_fStrings(extraction_query)
+                    df_master = spark.sql(extraction_query)
+                    df_master.persist(StorageLevel.MEMORY_AND_DISK)
+
+                    audit_count = df_master.count()
+
+                    # write in target
+
+                    for db in list(target['target_database']):
+                        print(db)
+                        audit_process_status ='success'
+                        if duplicate_status == True :
+                            audit_process_status = 'error'
+
+                        if audit_count != 0:
+                            _df = create_target(db, df_master, spark, base_url)
+                            connection_destination = get_connection_jdbc(sm_client, connection_key, db['destination'])
+
+                            for col in _df.columns:
+                                _df = _df.withColumnRenamed(col, col.lower().replace(' ', '_').replace("-", "_"))
+
+                        #if audit_count != 0:
+                            # add audit columns :
+                            _df = _df.withColumn("process_run_date", F.lit(process_run_date).cast("int")) \
+                                .withColumn("job_run_id", F.lit(job_run_id))
+
+                            if db['outputtype'] == 's3_file':
+                                try:
+                                    _file_name = '{}_{}'.format(company, eval(db['partition_key']))
+                                    _path_s3 = 's3://{}/{}/{}'.format(connection_destination['data_bucket_name'],db['table_name'],_file_name)
+                                    if audit_count > 500000:
+                                        _df.write.option("header", "true").mode('overwrite').csv(_path_s3)
+                                    else:
+                                        _df.coalesce(1).write.option("header", "true").mode('overwrite').csv(_path_s3)
+                                except Exception as error:
+                                    audit_process_status = 'error'
+                                    r_error = str(error)
+                                    print("Oops! An exception has occured:", error)
+                                    print("Exception TYPE:", type(error))
+                                    if eerror == None:
+                                        eerror = "Hi,\n\nBelow is the Failure details :\n  Failure Summary : \n -----------------------------------------------\n Error: {}\n". \
+                                            format(str(r_error))
+                                    else:
+                                        eerror = "{}\n\n{}".format(eerror,str(r_error))
+
+                            if db['outputtype'] == 'gp_batch':
+                                postgres_writer = PostgresSQLWriter(connection_destination, spark)
+                                audit_process_status = postgres_writer.write_batch(_df, db, False)
+
+                            if db['outputtype'] == 'postgresql_batch':
+                                postgres_writer = PostgresSQLWriter(connection_destination, spark)
+                                audit_process_status = postgres_writer.write_batch(_df, db, True)
+
+
+                            if db['outputtype'] == 'redshift':
+                                redshift_writer = PostgresSQLWriter(connection_destination, spark)
+                                audit_process_status = redshift_writer.redsfift_copy(_df, db )
+
+
+                            if db['outputtype'] == 'parquet':
+                                athena_writer = AthenaWriter(connection_destination, athena)
+                                audit_process_status = athena_writer.write_table(_df, db)
+
+
+                            if db['outputtype'] == 'hudi':
+                                hudi_writer = HudiWriter(connection_destination, athena, spark)
+                                audit_process_status = hudi_writer.write_table(_df, db)
+
+
+                        audit_datetime_end = datetime.strptime(str(datetime.now().strftime('%Y-%m-%d-%H:%M:%S')),
+                                                                   '%Y-%m-%d-%H:%M:%S')
+
+                        r_audit.append({'audit_id': job_run_id, 'etl_process_detail_id': etl_process_detail_id,
+                                            'etl_process_run_date': process_run_date,
+                                            'etl_process_start_dt': audit_datetime_start,
+                                            'etl_process_end_dt': audit_datetime_end,
+                                            'etl_process_status': audit_process_status, 'etl_process_rows': audit_count,
+                                            'etl_process_id': etl_process_order, 'target_name': db['destination'], 'step': 'target-write'})
+
+                        print('r_audit')
+                        print(r_audit)
+
+
+
+                    df_master.unpersist()
+
+
+                #post_actions
+                only_error = [d['target_name'] for d in [status for status in r_audit if status['etl_process_status'] == 'error'] if 'target_name' in d]
+                for post in post_actions_list:
+                    depend_on = post['depend_on'].split(",")
+                    if any(x in depend_on for x in only_error):
+                        post_status = 'ignore'
+                    else:
+                        post_status = 'success'
+                        post_action_query = post['action']
+                        if 'parameters' in post:
+                            if post['parameters'] != None:
+                                post_action_query = post['action'].format(eval(post['parameters']))
+                        post_action_query = to_fStrings(post_action_query)
+                        print('post_action query: {}'.format(post_action_query))
+                        post_connection_destination = get_connection_jdbc(sm_client, connection_key, post['connection'])
+                        if post['connection_type']in ['greenplum', 'redshift', 'postgres']:
+                            postgres_connection = PostgresSQLConnection(post_connection_destination)
+                            post_status = 'success' if postgres_connection.execute_actions(post_action_query) == True else 'error'
+                        if post['connection_type'] =='sqlserver':
+                            sqlserver_connection = SQLServerConnection(post_connection_destination)
+                            post_status = 'success' if sqlserver_connection.execute_actions(post_action_query) == True else 'error'
 
 
                     audit_datetime_end = datetime.strptime(str(datetime.now().strftime('%Y-%m-%d-%H:%M:%S')),
-                                                               '%Y-%m-%d-%H:%M:%S')
+                                                           '%Y-%m-%d-%H:%M:%S')
 
                     r_audit.append({'audit_id': job_run_id, 'etl_process_detail_id': etl_process_detail_id,
-                                        'etl_process_run_date': process_run_date,
-                                        'etl_process_start_dt': audit_datetime_start,
-                                        'etl_process_end_dt': audit_datetime_end,
-                                        'etl_process_status': audit_process_status, 'etl_process_rows': audit_count,
-                                        'etl_process_id': etl_process_order, 'target_name': db['destination'], 'step': 'target-write'})
+                                    'etl_process_run_date': process_run_date,
+                                    'etl_process_start_dt': audit_datetime_start,
+                                    'etl_process_end_dt': audit_datetime_end,
+                                    'etl_process_status': post_status, 'etl_process_rows': 0,
+                                    'etl_process_id': etl_process_order, 'target_name': post['connection'], 'step': 'post_action'})
 
-                    print('r_audit')
-                    print(r_audit)
+                if (len(only_error) == 0) & (backdate in ('backdate', 'daily')):
+                    if backdate == 'backdate':
+                        etl_db = {'destination': 'alr', 'mode': 'append', 'partition_key': 'null','table_name': 'clr.etl_backdated'}
+                        temp_elt_df = df_study.select('studyid', 'rltv_mo').distinct()
+                        temp_elt_df = temp_elt_df.withColumn("last_process_day", F.lit(None).cast(DateType()))
+                        temp_elt_df = temp_elt_df.withColumn("fetch_run_date",F.lit(process_run_date).cast("int")).withColumn("fetch_run_id",F.lit(job_run_id))
 
+                        if _elt_df is not None and isinstance(_elt_df, DataFrame):
+                            _elt_df = _elt_df.union(temp_elt_df)
+                        else:
+                            _elt_df = temp_elt_df
 
-                    #_df.printSchema()
+                    else:
+                        etl_db = {'destination': 'alr', 'mode': 'append', 'partition_key': 'null','table_name': 'clr.etl_log'}
+                        temp_elt_df = df_study.select('studyid', 'greg_date').distinct()
+                        temp_elt_df = temp_elt_df.withColumn("process_run_date",F.lit(process_run_date).cast("int")).withColumn("job_run_id",F.lit(job_run_id))
 
-                df_master.unpersist()
+                        if _elt_df is not None and isinstance(_elt_df, DataFrame):
+                            _elt_df = _elt_df.union(temp_elt_df)
+                        else:
+                            _elt_df = temp_elt_df
 
-            #post_actions
-            only_error = [d['target_name'] for d in [status for status in r_audit if status['etl_process_status'] == 'error'] if 'target_name' in d]
-            for post in post_actions_list:
-                depend_on = post['depend_on'].split(",")
-                if any(x in depend_on for x in only_error):
-                    post_status = 'ignore'
-                else:
-                    post_status = 'success'
-                    post_action_query = post['action']
-                    if 'parameters' in post:
-                        if post['parameters'] != None:
-                            post_action_query = post['action'].format(eval(post['parameters']))
-                    post_action_query = to_fStrings(post_action_query)
-                    print('post_action query: {}'.format(post_action_query))
-                    post_connection_destination = get_connection_jdbc(sm_client, connection_key, post['connection'])
-                    if post['connection_type']in ['greenplum', 'redshift', 'postgres']:
-                        postgres_connection = PostgresSQLConnection(post_connection_destination)
-                        post_status = 'success' if postgres_connection.execute_actions(post_action_query) == True else 'error'
-                    if post['connection_type'] =='sqlserver':
-                        sqlserver_connection = SQLServerConnection(post_connection_destination)
-                        post_status = 'success' if sqlserver_connection.execute_actions(post_action_query) == True else 'error'
+                    #connection_etl = get_connection_jdbc(sm_client, connection_key, etl_db['destination'])
+                    #postgres_writer = PostgresSQLWriter(connection_etl, spark)
+                    #postgres_writer.write_jdbc(_elt_df, etl_db, True)
 
 
+                _pb_accounts = None
+                _meters = None
+                _mada = None
+                all_mada = None
+                df_study = None
+                df_study_premise = None
 
+            else:  # break_process == True
+                # Create audit entry for skipped process
                 audit_datetime_end = datetime.strptime(str(datetime.now().strftime('%Y-%m-%d-%H:%M:%S')),
                                                        '%Y-%m-%d-%H:%M:%S')
 
-                r_audit.append({'audit_id': job_run_id, 'etl_process_detail_id': etl_process_detail_id,
-                                'etl_process_run_date': process_run_date,
-                                'etl_process_start_dt': audit_datetime_start,
-                                'etl_process_end_dt': audit_datetime_end,
-                                'etl_process_status': post_status, 'etl_process_rows': 0,
-                                'etl_process_id': etl_process_order, 'target_name': post['connection'], 'step': 'post_action'})
+                # Create audit row for each target that would have been processed
+                for target in target_list:
+                    for db in list(target['target_database']):
+                        r_audit.append({
+                            'audit_id': job_run_id,
+                            'etl_process_detail_id': etl_process_detail_id,
+                            'etl_process_run_date': process_run_date,
+                            'etl_process_start_dt': audit_datetime_start,
+                            'etl_process_end_dt': audit_datetime_end,
+                            'etl_process_status': 'skipped',
+                            # or 'no_data' - whatever status indicates no processing needed
+                            'etl_process_rows': 0,
+                            'etl_process_id': etl_process_order,
+                            'target_name': db['destination'],
+                            'step': 'target-write'
+                        })
 
-        if len(only_error) == 0:
-            if backdate == 'backdate':
-                etl_db = {'destination': 'alr', 'mode': 'append', 'partition_key': 'null', 'table_name': 'clr.etl_backdated'}
-                _elt_df = df_study.select('studyid', 'rltv_mo').distinct()
-                _elt_df = _elt_df.withColumn("fetch_run_date", F.lit(process_run_date).cast("int")).withColumn("fetch_run_id", F.lit(job_run_id))
+                # Also create audit entries for post_actions if needed
+                for post in post_actions_list:
+                    audit_datetime_end = datetime.strptime(str(datetime.now().strftime('%Y-%m-%d-%H:%M:%S')),
+                                                           '%Y-%m-%d-%H:%M:%S')
+                    r_audit.append({
+                        'audit_id': job_run_id,
+                        'etl_process_detail_id': etl_process_detail_id,
+                        'etl_process_run_date': process_run_date,
+                        'etl_process_start_dt': audit_datetime_start,
+                        'etl_process_end_dt': audit_datetime_end,
+                        'etl_process_status': 'no data',
+                        'etl_process_rows': 0,
+                        'etl_process_id': etl_process_order,
+                        'target_name': post['connection'],
+                        'step': 'post_action'
+                    })
 
-            else:
-                etl_db = {'destination': 'alr', 'mode': 'append', 'partition_key': 'null','table_name': 'clr.etl_log'}
-                _elt_df = df_study.select('studyid', 'greg_date').distinct()
+                print('Process skipped - no data to process. Audit rows created.')
+                print('r_audit')
+                print(r_audit)
 
-                _elt_df = _elt_df.withColumn("process_run_date", F.lit(process_run_date).cast("int")).withColumn("job_run_id", F.lit(job_run_id))
+        #spark.sql('DROP TABLE IF EXISTS default.{}'.format(table_name_mm_gulf)).count()
 
+
+        if _elt_df != None:
+            _elt_df= _elt_df.dropDuplicates()
             connection_etl = get_connection_jdbc(sm_client, connection_key, etl_db['destination'])
             postgres_writer = PostgresSQLWriter(connection_etl, spark)
             postgres_writer.write_jdbc(_elt_df, etl_db, True)
-
-
-        #spark.sql('DROP TABLE IF EXISTS {}'.format(mada_table_name))
 
         print('write audit')
         print(r_audit)
@@ -1197,14 +2173,23 @@ def to_process(spark,  process_step, process_run_date, job_run_id, region_name, 
 
             _audit_df.show()
 
-            audit_db = {'destination': 'audit_rds', 'mode': 'append', 'partition_key':'null','table_name':'audit.css_audit'}
+            audit_db = {'destination': 'audit_rds', 'mode': 'append', 'partition_key':'null','table_name':'clr.css_audit'}
             connection_audit = get_connection_jdbc(sm_client, connection_key, audit_db['destination'])
             postgres_writer = PostgresSQLWriter(connection_audit, spark)
             postgres_writer.write_jdbc(_audit_df, audit_db, True)
 
+            only_error = [status for status in r_audit if status['etl_process_status'] == 'error']
+            if len(only_error) > 0:
+                print(eerror)
+                write_error(region_name, Topic, cw_log_group, eSubjectName, eerror)
+
 
     except Exception as e:
-        print(e)
+        print('Error description: {}'.format(e))
+        eerror = "Hi,\n\nBelow is the Failure details :\n  Failure Summary : \n -----------------------------------------------\n Error: {}\n". \
+            format(str(e))
+        print(eerror)
+        write_error(region_name, Topic, cw_log_group, eSubjectName, eerror)
 
 
 
@@ -1226,6 +2211,9 @@ def parse_arguments(args):
     parser.add_argument('-r', '--region_name', required=False, help='AWS Region name')
     parser.add_argument('-m', '--rltv_greg_mo', required=False, help='rltv_greg_mo')
     parser.add_argument('-a', '--backdate', required=False, help='')
+    parser.add_argument('-t', '--sns_topic', required=False, help='sns Topic')
+    parser.add_argument('-g', '--cw_log_group', required=False, help='CloudWatch')
+    parser.add_argument('-d', '--dag_name', required=False, help='Dag Name')
     options = get_parameter_options(parser, args)
     return options
 
@@ -1249,11 +2237,21 @@ def main():
     p_end_date = options.get('p_end_date') or process_run_date
     print('p_start_date: {}'.format(p_start_date))
     print('p_end_date: {}'.format(p_end_date))
+
+    Topic = options.get('sns_topic') or None
+    cw_log_group = options.get('cw_log_group') or None
+    dag_name = options.get('dag_name') or None
+
+    if Topic != None: Topic = Topic.strip()
+    if cw_log_group != None: cw_log_group = cw_log_group.strip()
+    if dag_name != None: dag_name = dag_name.strip()
+
     rltv_greg_mo = options.get('rltv_greg_mo') or None
-    backdate = options.get('backdate') or '0'
+    backdate = options.get('backdate') or 'daily'
+    if rltv_greg_mo != None:
+        rltv_greg_mo =rltv_greg_mo.strip()
 
-
-
+    eSubjectName = "LR Fetch process failed for Dag: {}".format(dag_name)
 
 
     # spark env
@@ -1264,7 +2262,8 @@ def main():
         process_step_url = "s3a://{}".format(process_step_url.strip())
     print(process_step_url)
 
-    to_process(spark, process_step_url, process_run_date.strip(), job_run_id.strip(), region_name.strip(), p_start_date.strip(), p_end_date.strip(), rltv_greg_mo, backdate)
+    print('Process type: {}'.format(backdate))
+    to_process(spark, process_step_url, process_run_date.strip(), job_run_id.strip(), region_name.strip(), p_start_date.strip(), p_end_date.strip(), rltv_greg_mo, backdate.strip(), cw_log_group, Topic, eSubjectName)
     spark.stop()
 
 
