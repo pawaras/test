@@ -1,0 +1,27 @@
+# fallback (Fallback) Prompt Configuration for Bedrock Prompt Management
+
+name: prompt-summary-fallback
+description: fallback fallback prompt for generating customer interaction summaries
+
+# Simplified template for faster processing
+template: |
+  Summarize these customer interactions briefly:
+  {{interactions}}
+  
+  Focus on the main issue and resolution.
+
+# Input variables schema
+variables:
+  - name: interactions
+    type: string
+    description: "JSON array of customer interaction records"
+
+# Inference configuration (lower tokens for faster response)
+inference_config:
+  max_tokens: 1024
+  temperature: 0.1
+  top_p: 0.9
+  stop_sequences: []
+
+# Model will be injected by CI/CD from SSM Parameter Store
+# model_id: ${fallback_INFERENCE_PROFILE_ARN}
