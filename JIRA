@@ -1,0 +1,12 @@
+Sprint 47.3 Tasks
+Estimate DynamoDB cost for 5 million calls - 
+Estimate DynamoDB cost for 5 million API calls, including read/write capacity, storage, and potential scaling costs.
+
+Research prompt deployment automation - 
+Research and propose a method to automate prompt deployment and ensure the API always uses the latest version of the prompt. Consider version control, CI/CD integration, and rollback strategies for prompt updates.
+
+Design and test prompt deployment automation - 
+Currently, prompts deploy automatically to DRAFT but require manual version management when promoting to PRODUCTION with auto-incremented version numbers. Design and implement a seamless deployment automation that always points to the latest version without manual code changes. Consider version aliases (LATEST, PRODUCTION), CI/CD integration, and rollback strategies for prompt updates.
+
+Explore Comprehend for new PPC requirements -
+[PLACEHOLDER - Subject to sync-up meeting discussion] Explore Comprehend capabilities and prepare for new requirements. Review current entity ext                 raction, PII detection, and integration needs. Update approach after requirements are finalized.
