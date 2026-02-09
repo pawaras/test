@@ -1,0 +1,42 @@
+2 files changed
++6
+-6
+lines changed
+Search within code
+ 
+‎Prod/airflow-MWAA/load_research_data_fetch_dag.py‎
++1
+-1
+Lines changed: 1 addition & 1 deletion
+Original file line number	Diff line number	Diff line change
+@@ -37,7 +37,7 @@
+}
+
+# Initialize the DAG
+dag = DAG('load_research_data_fetch', catchup=False, max_active_runs=1,concurrency=1, schedule_interval='30 13 * * *', default_args=default_args)
+dag = DAG('load_research_data_fetch', catchup=False, max_active_runs=1,concurrency=1, schedule_interval='00 10 * * *', default_args=default_args)
+dag_name = 'load_research_data_fetch'
+
+config = Config(connect_timeout=30, read_timeout=30, proxies={'https': 'http://EVAPzen.fpl.com:10262'})
+‎Prod/airflow-MWAA/load_research_reprocess_dag.py‎
++5
+-5
+Lines changed: 5 additions & 5 deletions
+Original file line number	Diff line number	Diff line change
+@@ -258,11 +258,11 @@ def get_audit_alr(audit_id, etl_process_detail_id, sm, key, process_steps=None):
+                target_write = [
+                    item for item in r_audit if item[2] == 'target-write']
+                only_error = [item for item in r_audit if item[0] == 'error']
+                if len(target_write) != process_steps:
+                    logger.info('Error: {}'.format(target_write))
+                    error_msg = 'ED124 - Audit is not matching with Process step: return: {}'.format(
+                        str(target_write))
+                elif len(only_error) > 0:
+                # if len(target_write) != process_steps:
+                #     logger.info('Error: {}'.format(target_write))
+                #     error_msg = 'ED124 - Audit is not matching with Process step: return: {}'.format(
+                #         str(target_write))
+                if len(only_error) > 0:
+                    logger.info('Error: {}'.format(only_error))
+                    error_msg = 'ED126 - Audit encountered error in one or more process step, return: {}'.format(
+                        str(only_error))
